@@ -19,6 +19,8 @@ const GUARDIAN_SECTION = 'technology';
 const GUARDIAN_FIELDS = 'headline,trailText,thumbnail';
 const DEFAULT_MIN_HITS = 2;
 const DEFAULT_EXPIRY_FALLBACK_DELAY_SECONDS = 24 * 60 * 60;
+const APPLE_TECH_IMAGE_URL = '/market-images/apple-tech.webp';
+const GOOGLE_TECH_IMAGE_URL = '/market-images/google-tech.jpg';
 
 // --- ACTIVE TECH MARKETS ---
 const TECH_MARKETS = [
@@ -34,6 +36,7 @@ const TECH_MARKETS = [
         id: 3026002,
         description: "Will Apple announce a new AI-dedicated chip at WWDC?",
         expiryTimestamp: 1782864000,
+        imageUrl: APPLE_TECH_IMAGE_URL,
         searchQuery: "Apple WWDC AI chip silicon announcement",
         outcomeA_keywords: ["announces m4 ai", "new ai chip", "dedicated ai processor"],
         outcomeB_keywords: ["no new chip", "incremental update only"]
@@ -46,6 +49,7 @@ const TECH_MARKETS = [
         fromDate: "2026-05-19",
         settleAfterExpiry: true,
         expiryFallbackOutcome: 1,
+        imageUrl: GOOGLE_TECH_IMAGE_URL,
         searchQuery: "Google I/O 2026 Android 17 announcement",
         outcomeA_keywords: ["announced android 17", "unveiled android 17", "introduced android 17", "android 17"],
         outcomeB_keywords: ["no android 17", "android 17 absent", "without android 17"]
@@ -58,6 +62,7 @@ const TECH_MARKETS = [
         fromDate: "2026-05-19",
         settleAfterExpiry: true,
         expiryFallbackOutcome: 1,
+        imageUrl: GOOGLE_TECH_IMAGE_URL,
         searchQuery: "Google I/O 2026 new Gemini model announcement",
         outcomeA_keywords: ["new gemini model", "gemini 3", "announced gemini", "unveiled gemini"],
         outcomeB_keywords: ["no new gemini", "gemini absent", "without a new gemini"]
@@ -70,6 +75,7 @@ const TECH_MARKETS = [
         fromDate: "2026-06-08",
         settleAfterExpiry: true,
         expiryFallbackOutcome: 1,
+        imageUrl: APPLE_TECH_IMAGE_URL,
         searchQuery: "Apple WWDC 2026 iOS 27 announcement",
         outcomeA_keywords: ["announced ios 27", "unveiled ios 27", "introduced ios 27", "ios 27"],
         outcomeB_keywords: ["no ios 27", "ios 27 absent", "without ios 27"]
@@ -82,6 +88,7 @@ const TECH_MARKETS = [
         fromDate: "2026-06-08",
         settleAfterExpiry: true,
         expiryFallbackOutcome: 1,
+        imageUrl: APPLE_TECH_IMAGE_URL,
         searchQuery: "Apple WWDC 2026 Siri AI upgrade announcement",
         outcomeA_keywords: ["siri upgrade", "major siri", "siri ai", "apple intelligence siri", "personalized siri"],
         outcomeB_keywords: ["no siri", "siri delayed", "siri absent"]
@@ -127,6 +134,7 @@ async function processTech() {
                     category: "Tech",
                     title: mDef.description,
                     provider: "The Guardian",
+                    imageUrl: mDef.imageUrl,
                     startsAt: new Date(mDef.expiryTimestamp * 1000).toISOString(),
                     metadata: {
                         searchQuery: mDef.searchQuery,
@@ -153,13 +161,15 @@ async function processTech() {
             }));
 
             const articles = normalizeGuardianArticles(response.data?.response?.results || []);
+            const articleImage = firstArticleImage(articles);
             await upsertMarketMetadata({
                 marketId: mDef.id,
                 category: "Tech",
                 title: mDef.description,
                 provider: "The Guardian",
                 startsAt: new Date(mDef.expiryTimestamp * 1000).toISOString(),
-                ...firstArticleImage(articles),
+                ...articleImage,
+                imageUrl: mDef.imageUrl || articleImage.imageUrl,
                 metadata: {
                     searchQuery: mDef.searchQuery,
                     section: GUARDIAN_SECTION,
