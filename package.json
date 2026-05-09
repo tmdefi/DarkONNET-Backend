@@ -40,6 +40,7 @@
   },
   "scripts": {
     "start": "node backend/comments/server.js",
+    "start:railway": "node scripts/start-railway.js",
     "comments:dev": "node backend/comments/server.js",
     "oracle:esports": "node relayer/esports-oracle.js",
     "oracle:sports": "node relayer/sports-oracle.js",

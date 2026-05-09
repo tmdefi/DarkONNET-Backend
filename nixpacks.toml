@@ -2,4 +2,4 @@
 cmds = ["npm ci --omit=dev"]
 
 [start]
-cmd = "npm start"
+cmd = "npm run start:railway"
