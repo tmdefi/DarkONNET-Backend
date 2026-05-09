@@ -25,6 +25,7 @@ const MARKETS = [
         id: 5026001,
         category: "Finance",
         description: "Will the Federal Reserve raise interest rates in their next meeting?",
+        expiryTimestamp: 1780272000,
         searchQuery: "Federal Reserve interest rate decision hike increase",
         outcomeA_keywords: ["raised rates", "rate hike", "increased interest rates"],
         outcomeB_keywords: ["kept rates steady", "rates unchanged", "cut rates"]
@@ -34,6 +35,7 @@ const MARKETS = [
         id: 6026001,
         category: "Culture",
         description: "Will 'Dune: Part Three' be officially greenlit by June?",
+        expiryTimestamp: 1782864000,
         searchQuery: "Dune Part 3 greenlit confirmed production",
         outcomeA_keywords: ["officially greenlit", "confirmed for production", "part 3 announced"],
         outcomeB_keywords: ["canceled", "on hold", "no plans for part 3"]
@@ -41,9 +43,9 @@ const MARKETS = [
 ];
 
 const ABI = [
-    "function createMarket(uint256 _id, string _category, string _description) public",
+    "function createMarket(uint256 _id, string _category, string _description, uint64 _expiresAt) public",
     "function settle(uint256 _marketId, uint8 _winner, bool _isCanceled) public",
-    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
+    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, uint64 expiresAt, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
 ];
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
@@ -64,7 +66,7 @@ async function processMarkets() {
                 let tx;
                 try {
                     tx = await withBackoff(`finance-culture createMarket ${mDef.id}`, () =>
-                        contract.createMarket(mDef.id, mDef.category, mDef.description),
+                        contract.createMarket(mDef.id, mDef.category, mDef.description, mDef.expiryTimestamp),
                     );
                     await withBackoff(`finance-culture wait create ${mDef.id}`, () => tx.wait(), { retries: 1 });
                     creationCooldown.clear(mDef.id);

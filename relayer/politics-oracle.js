@@ -23,6 +23,7 @@ const POLITICAL_MARKETS = [
     {
         id: 2026001,
         description: "Will the Infrastructure Bill pass by May?",
+        expiryTimestamp: 1780272000,
         searchQuery: "Infrastructure bill vote result 2026",
         outcomeA_keywords: ["passed", "approved", "signed into law"],
         outcomeB_keywords: ["rejected", "failed", "voted down"]
@@ -30,9 +31,9 @@ const POLITICAL_MARKETS = [
 ];
 
 const ABI = [
-    "function createMarket(uint256 _id, string _category, string _description) public",
+    "function createMarket(uint256 _id, string _category, string _description, uint64 _expiresAt) public",
     "function settle(uint256 _marketId, uint8 _winner, bool _isCanceled) public",
-    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
+    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, uint64 expiresAt, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
 ];
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
@@ -54,7 +55,7 @@ async function processPolitics() {
                 let tx;
                 try {
                     tx = await withBackoff(`politics createMarket ${mDef.id}`, () =>
-                        contract.createMarket(mDef.id, "Politics", mDef.description),
+                        contract.createMarket(mDef.id, "Politics", mDef.description, mDef.expiryTimestamp),
                     );
                     await withBackoff(`politics wait create ${mDef.id}`, () => tx.wait(), { retries: 1 });
                     creationCooldown.clear(mDef.id);

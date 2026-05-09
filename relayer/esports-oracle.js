@@ -16,15 +16,21 @@ if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !API_KEY) {
 }
 
 const ABI = [
-    "function createMarket(uint256 _id, string _category, string _description) public",
+    "function createMarket(uint256 _id, string _category, string _description, uint64 _expiresAt) public",
     "function settle(uint256 _marketId, uint8 _winner, bool _isCanceled) public",
-    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
+    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, uint64 expiresAt, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
 ];
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 const creationCooldown = createCooldownCache('esports');
+
+function matchExpiryTimestamp(match) {
+    const beginAt = Date.parse(match.begin_at || '');
+    if (Number.isFinite(beginAt)) return Math.floor(beginAt / 1000);
+    return Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
+}
 
 async function autoCreateMarkets() {
     console.log("\n[ESPORTS] Scanning for upcoming matches...");
@@ -44,7 +50,7 @@ async function autoCreateMarkets() {
                 let tx;
                 try {
                     tx = await withBackoff(`esports createMarket ${match.id}`, () =>
-                        contract.createMarket(match.id, "Esports", match.name),
+                        contract.createMarket(match.id, "Esports", match.name, matchExpiryTimestamp(match)),
                     );
                     await withBackoff(`esports wait create ${match.id}`, () => tx.wait(), { retries: 1 });
                     creationCooldown.clear(match.id);

@@ -22,6 +22,7 @@ const TECH_MARKETS = [
     {
         id: 3026001,
         description: "Will OpenAI release GPT-5 before July 2026?",
+        expiryTimestamp: 1782864000,
         searchQuery: "OpenAI GPT-5 release launch announcement",
         outcomeA_keywords: ["released", "launched", "available now", "announces gpt-5"],
         outcomeB_keywords: ["delayed", "postponed", "no release in 2026"]
@@ -29,6 +30,7 @@ const TECH_MARKETS = [
     {
         id: 3026002,
         description: "Will Apple announce a new AI-dedicated chip at WWDC?",
+        expiryTimestamp: 1782864000,
         searchQuery: "Apple WWDC AI chip silicon announcement",
         outcomeA_keywords: ["announces m4 ai", "new ai chip", "dedicated ai processor"],
         outcomeB_keywords: ["no new chip", "incremental update only"]
@@ -36,9 +38,9 @@ const TECH_MARKETS = [
 ];
 
 const ABI = [
-    "function createMarket(uint256 _id, string _category, string _description) public",
+    "function createMarket(uint256 _id, string _category, string _description, uint64 _expiresAt) public",
     "function settle(uint256 _marketId, uint8 _winner, bool _isCanceled) public",
-    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
+    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, uint64 expiresAt, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
 ];
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
@@ -59,7 +61,7 @@ async function processTech() {
                 let tx;
                 try {
                     tx = await withBackoff(`tech createMarket ${mDef.id}`, () =>
-                        contract.createMarket(mDef.id, "Tech", mDef.description),
+                        contract.createMarket(mDef.id, "Tech", mDef.description, mDef.expiryTimestamp),
                     );
                     await withBackoff(`tech wait create ${mDef.id}`, () => tx.wait(), { retries: 1 });
                     creationCooldown.clear(mDef.id);

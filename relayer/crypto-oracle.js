@@ -35,9 +35,9 @@ const CRYPTO_MARKETS = [
 ];
 
 const ABI = [
-    "function createMarket(uint256 _id, string _category, string _description) public",
+    "function createMarket(uint256 _id, string _category, string _description, uint64 _expiresAt) public",
     "function settle(uint256 _marketId, uint8 _winner, bool _isCanceled) public",
-    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
+    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, uint64 expiresAt, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
 ];
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
@@ -58,7 +58,7 @@ async function processCrypto() {
                 let tx;
                 try {
                     tx = await withBackoff(`crypto createMarket ${mDef.id}`, () =>
-                        contract.createMarket(mDef.id, "Crypto", mDef.description, { gasLimit: 3000000 }),
+                        contract.createMarket(mDef.id, "Crypto", mDef.description, mDef.expiryTimestamp, { gasLimit: 3000000 }),
                     );
                     await withBackoff(`crypto wait create ${mDef.id}`, () => tx.wait(), { retries: 1 });
                     creationCooldown.clear(mDef.id);

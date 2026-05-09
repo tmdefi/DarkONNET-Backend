@@ -15,15 +15,21 @@ if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !API_KEY) {
 }
 
 const ABI = [
-    "function createMarket(uint256 _id, string _category, string _description) public",
+    "function createMarket(uint256 _id, string _category, string _description, uint64 _expiresAt) public",
     "function settle(uint256 _marketId, uint8 _winner, bool _isCanceled) public",
-    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
+    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, uint64 expiresAt, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
 ];
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 const creationCooldown = createCooldownCache('sports');
+
+function expiryFromDate(value, fallbackDays = 7) {
+    const parsed = Date.parse(value || '');
+    if (Number.isFinite(parsed)) return Math.floor(parsed / 1000);
+    return Math.floor(Date.now() / 1000) + fallbackDays * 24 * 60 * 60;
+}
 
 // API Hosts
 const HOSTS = {
@@ -58,7 +64,12 @@ async function processFootball() {
                 let tx;
                 try {
                     tx = await withBackoff(`football createMarket ${f.fixture.id}`, () =>
-                        contract.createMarket(f.fixture.id, "Sports - Football", `${f.teams.home.name} vs ${f.teams.away.name}`),
+                        contract.createMarket(
+                            f.fixture.id,
+                            "Sports - Football",
+                            `${f.teams.home.name} vs ${f.teams.away.name}`,
+                            expiryFromDate(f.fixture.date),
+                        ),
                     );
                     await withBackoff(`football wait create ${f.fixture.id}`, () => tx.wait(), { retries: 1 });
                     creationCooldown.clear(f.fixture.id);
@@ -117,7 +128,12 @@ async function processNFL() {
                 let tx;
                 try {
                     tx = await withBackoff(`nfl createMarket ${g.game.id}`, () =>
-                        contract.createMarket(g.game.id, "Sports - NFL", `${g.teams.home.name} vs ${g.teams.away.name}`),
+                        contract.createMarket(
+                            g.game.id,
+                            "Sports - NFL",
+                            `${g.teams.home.name} vs ${g.teams.away.name}`,
+                            expiryFromDate(g.game.date?.date),
+                        ),
                     );
                     await withBackoff(`nfl wait create ${g.game.id}`, () => tx.wait(), { retries: 1 });
                     creationCooldown.clear(g.game.id);
@@ -177,7 +193,12 @@ async function processF1() {
                 let tx;
                 try {
                     tx = await withBackoff(`f1 createMarket ${r.id}`, () =>
-                        contract.createMarket(r.id, "Sports - F1", `Winner of ${r.competition.name}`),
+                        contract.createMarket(
+                            r.id,
+                            "Sports - F1",
+                            `Winner of ${r.competition.name}`,
+                            expiryFromDate(r.date),
+                        ),
                     );
                     await withBackoff(`f1 wait create ${r.id}`, () => tx.wait(), { retries: 1 });
                     creationCooldown.clear(r.id);

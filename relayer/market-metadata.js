@@ -19,17 +19,39 @@ async function upsertMarketMetadata(market) {
     if (process.env.DISABLE_MARKET_METADATA === 'true' || !supabase) return;
 
     try {
+        const now = new Date().toISOString();
         const payload = {
-            ...market,
-            marketId: String(market.marketId),
-            onchainMarketId: String(market.onchainMarketId || market.marketId),
-            updatedAt: new Date().toISOString()
+            market_id: String(market.marketId),
+            onchain_market_id: String(market.onchainMarketId || market.marketId),
+            slug: market.slug || null,
+            category: market.category,
+            title: market.title,
+            description: market.description || null,
+            provider: market.provider || null,
+            image_url: market.imageUrl || null,
+            home_name: market.homeName || null,
+            away_name: market.awayName || null,
+            home_logo_url: market.homeLogoUrl || null,
+            away_logo_url: market.awayLogoUrl || null,
+            league_name: market.leagueName || null,
+            league_logo_url: market.leagueLogoUrl || null,
+            source_url: market.sourceUrl || null,
+            source_name: market.sourceName || null,
+            starts_at: market.startsAt || null,
+            creator_wallet_address: market.creatorWalletAddress || null,
+            status: market.status || 'accepted',
+            accepted_at: market.acceptedAt || now,
+            resolved_at: market.resolvedAt || null,
+            resolution: market.resolution || null,
+            participants: Array.isArray(market.participants) ? market.participants : [],
+            metadata: market.metadata || {},
+            updated_at: now,
         };
 
         const { error } = await withBackoff(`metadata upsert ${market.marketId}`, () =>
             supabase
                 .from('markets')
-                .upsert(payload, { onConflict: 'marketId' }),
+                .upsert(payload, { onConflict: 'market_id' }),
         );
 
         if (error) throw error;
