@@ -87,11 +87,13 @@ data/
 
 # Scratch scripts
 test-*.js
+scratch/
 
 # Unused vendored monorepo/dependencies. Keep the small build-critical Solidity packages under
 # lib/forge-fhevm/dependencies tracked when committing Foundry support.
 lib/fhevm/
 lib/forge-fhevm/docs/
+lib/forge-fhevm/dependencies/@openzeppelin-contracts-5.1.0/build/
 lib/forge-fhevm/dependencies/@openzeppelin-confidential-contracts-6edd293/
 lib/forge-fhevm/dependencies/@openzeppelin-contracts-upgradeable-5.1.0/
 lib/forge-fhevm/dependencies/forge-std-1.14.0/
