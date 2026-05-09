@@ -17,6 +17,8 @@ if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !API_KEY) {
 const GUARDIAN_API_URL = 'https://content.guardianapis.com/search';
 const GUARDIAN_SECTION = 'technology';
 const GUARDIAN_FIELDS = 'headline,trailText,thumbnail';
+const DEFAULT_MIN_HITS = 2;
+const DEFAULT_EXPIRY_FALLBACK_DELAY_SECONDS = 24 * 60 * 60;
 
 // --- ACTIVE TECH MARKETS ---
 const TECH_MARKETS = [
@@ -35,6 +37,54 @@ const TECH_MARKETS = [
         searchQuery: "Apple WWDC AI chip silicon announcement",
         outcomeA_keywords: ["announces m4 ai", "new ai chip", "dedicated ai processor"],
         outcomeB_keywords: ["no new chip", "incremental update only"]
+    },
+    {
+        id: 3026003,
+        description: "Will Google announce Android 17 during Google I/O 2026?",
+        expiryTimestamp: 1779408000,
+        resolutionStartTimestamp: 1779148800,
+        fromDate: "2026-05-19",
+        settleAfterExpiry: true,
+        expiryFallbackOutcome: 1,
+        searchQuery: "Google I/O 2026 Android 17 announcement",
+        outcomeA_keywords: ["announced android 17", "unveiled android 17", "introduced android 17", "android 17"],
+        outcomeB_keywords: ["no android 17", "android 17 absent", "without android 17"]
+    },
+    {
+        id: 3026004,
+        description: "Will Google announce a new Gemini model during Google I/O 2026?",
+        expiryTimestamp: 1779408000,
+        resolutionStartTimestamp: 1779148800,
+        fromDate: "2026-05-19",
+        settleAfterExpiry: true,
+        expiryFallbackOutcome: 1,
+        searchQuery: "Google I/O 2026 new Gemini model announcement",
+        outcomeA_keywords: ["new gemini model", "gemini 3", "announced gemini", "unveiled gemini"],
+        outcomeB_keywords: ["no new gemini", "gemini absent", "without a new gemini"]
+    },
+    {
+        id: 3026005,
+        description: "Will Apple announce iOS 27 during WWDC 2026?",
+        expiryTimestamp: 1781481600,
+        resolutionStartTimestamp: 1780876800,
+        fromDate: "2026-06-08",
+        settleAfterExpiry: true,
+        expiryFallbackOutcome: 1,
+        searchQuery: "Apple WWDC 2026 iOS 27 announcement",
+        outcomeA_keywords: ["announced ios 27", "unveiled ios 27", "introduced ios 27", "ios 27"],
+        outcomeB_keywords: ["no ios 27", "ios 27 absent", "without ios 27"]
+    },
+    {
+        id: 3026006,
+        description: "Will Apple announce major Siri AI upgrades during WWDC 2026?",
+        expiryTimestamp: 1781481600,
+        resolutionStartTimestamp: 1780876800,
+        fromDate: "2026-06-08",
+        settleAfterExpiry: true,
+        expiryFallbackOutcome: 1,
+        searchQuery: "Apple WWDC 2026 Siri AI upgrade announcement",
+        outcomeA_keywords: ["siri upgrade", "major siri", "siri ai", "apple intelligence siri", "personalized siri"],
+        outcomeB_keywords: ["no siri", "siri delayed", "siri absent"]
     }
 ];
 
@@ -51,6 +101,7 @@ const creationCooldown = createCooldownCache('tech');
 
 async function processTech() {
     console.log("\n--- Scanning Tech Markets ---");
+    const now = Math.floor(Date.now() / 1000);
 
     for (const mDef of TECH_MARKETS) {
         try {
@@ -80,6 +131,7 @@ async function processTech() {
                     metadata: {
                         searchQuery: mDef.searchQuery,
                         section: GUARDIAN_SECTION,
+                        fromDate: mDef.fromDate,
                     },
                 });
                 continue;
@@ -96,6 +148,7 @@ async function processTech() {
                     'order-by': 'relevance',
                     'page-size': 10,
                     'show-fields': GUARDIAN_FIELDS,
+                    ...(mDef.fromDate ? { 'from-date': mDef.fromDate } : {}),
                 },
             }));
 
@@ -110,6 +163,7 @@ async function processTech() {
                 metadata: {
                     searchQuery: mDef.searchQuery,
                     section: GUARDIAN_SECTION,
+                    fromDate: mDef.fromDate,
                 },
             });
 
@@ -123,17 +177,32 @@ async function processTech() {
             }
 
             console.log(`[DATA] Hits for A: ${countA}, Hits for B: ${countB}`);
+            const canResolveFromNews = !mDef.resolutionStartTimestamp || now >= mDef.resolutionStartTimestamp;
+            if (!canResolveFromNews) {
+                console.log(`[WAIT] Resolution window has not opened for market ${mDef.id}.`);
+                continue;
+            }
 
-            if (countA >= 2) {
+            if (countA >= (mDef.outcomeA_minHits || DEFAULT_MIN_HITS)) {
                 console.log(`[SETTLE] Tech Event Confirmed (A)!`);
                 const tx = await withBackoff(`tech settle A ${mDef.id}`, () => contract.settle(mDef.id, 0, false));
                 await withBackoff(`tech wait settle A ${mDef.id}`, () => tx.wait(), { retries: 1 });
                 console.log(`[SUCCESS] Market ${mDef.id} Settled.`);
-            } else if (countB >= 2) {
+            } else if (countB >= (mDef.outcomeB_minHits || DEFAULT_MIN_HITS)) {
                 console.log(`[SETTLE] Tech Event Confirmed (B)!`);
                 const tx = await withBackoff(`tech settle B ${mDef.id}`, () => contract.settle(mDef.id, 1, false));
                 await withBackoff(`tech wait settle B ${mDef.id}`, () => tx.wait(), { retries: 1 });
                 console.log(`[SUCCESS] Market ${mDef.id} Settled.`);
+            } else if (mDef.settleAfterExpiry) {
+                const fallbackDelay = mDef.expiryFallbackDelaySeconds || DEFAULT_EXPIRY_FALLBACK_DELAY_SECONDS;
+                if (now >= mDef.expiryTimestamp + fallbackDelay) {
+                    console.log(`[SETTLE] Resolution window expired. Settling fallback outcome ${mDef.expiryFallbackOutcome}.`);
+                    const tx = await withBackoff(`tech settle fallback ${mDef.id}`, () =>
+                        contract.settle(mDef.id, mDef.expiryFallbackOutcome, false),
+                    );
+                    await withBackoff(`tech wait settle fallback ${mDef.id}`, () => tx.wait(), { retries: 1 });
+                    console.log(`[SUCCESS] Market ${mDef.id} Settled by expiry fallback.`);
+                }
             }
 
         } catch (error) {
