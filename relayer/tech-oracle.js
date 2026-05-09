@@ -5,17 +5,18 @@ const { firstArticleImage, upsertMarketMetadata } = require('./market-metadata')
 const { createCooldownCache, startStaggeredLoop, withBackoff } = require('./oracle-utils');
 
 // --- CONFIGURATION ---
-const API_KEY = process.env.TECH_NEWS_API_KEY || process.env.NEWS_API_KEY;
+const API_KEY = process.env.TECH_GUARDIAN_API_KEY || process.env.GUARDIAN_API_KEY || process.env.TECH_NEWS_API_KEY;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const RPC_URL = process.env.RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 
 if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !API_KEY) {
-    throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, or TECH_NEWS_API_KEY/NEWS_API_KEY in .env');
+    throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, or TECH_GUARDIAN_API_KEY/GUARDIAN_API_KEY in .env');
 }
 
-// Trusted Tech News Sources
-const TECH_SOURCES = 'techcrunch,the-verge,wired,ars-technica,engadget';
+const GUARDIAN_API_URL = 'https://content.guardianapis.com/search';
+const GUARDIAN_SECTION = 'technology';
+const GUARDIAN_FIELDS = 'headline,trailText,thumbnail';
 
 // --- ACTIVE TECH MARKETS ---
 const TECH_MARKETS = [
@@ -70,32 +71,45 @@ async function processTech() {
                     throw error;
                 }
                 console.log(`[SUCCESS] Market ${mDef.id} Created.`);
+                await upsertMarketMetadata({
+                    marketId: mDef.id,
+                    category: "Tech",
+                    title: mDef.description,
+                    provider: "The Guardian",
+                    startsAt: new Date(mDef.expiryTimestamp * 1000).toISOString(),
+                    metadata: {
+                        searchQuery: mDef.searchQuery,
+                        section: GUARDIAN_SECTION,
+                    },
+                });
                 continue;
             }
 
             if (onChainMarket.isSettled) continue;
 
             console.log(`[CHECK] Searching news for: ${mDef.description}`);
-            const response = await withBackoff(`newsapi tech ${mDef.id}`, () => axios.get('https://newsapi.org/v2/everything', {
+            const response = await withBackoff(`guardian tech ${mDef.id}`, () => axios.get(GUARDIAN_API_URL, {
                 params: {
+                    'api-key': API_KEY,
                     q: mDef.searchQuery,
-                    sources: TECH_SOURCES,
-                    sortBy: 'relevancy',
-                    language: 'en'
+                    section: GUARDIAN_SECTION,
+                    'order-by': 'relevance',
+                    'page-size': 10,
+                    'show-fields': GUARDIAN_FIELDS,
                 },
-                headers: { 'X-Api-Key': API_KEY }
             }));
 
-            const articles = response.data.articles;
+            const articles = normalizeGuardianArticles(response.data?.response?.results || []);
             await upsertMarketMetadata({
                 marketId: mDef.id,
                 category: "Tech",
                 title: mDef.description,
-                provider: "NewsAPI",
+                provider: "The Guardian",
+                startsAt: new Date(mDef.expiryTimestamp * 1000).toISOString(),
                 ...firstArticleImage(articles),
                 metadata: {
                     searchQuery: mDef.searchQuery,
-                    sources: TECH_SOURCES,
+                    section: GUARDIAN_SECTION,
                 },
             });
 
@@ -126,6 +140,16 @@ async function processTech() {
             console.error(`[ERROR] Tech Oracle failed for ${mDef.id}:`, error.message);
         }
     }
+}
+
+function normalizeGuardianArticles(results) {
+    return results.map(result => ({
+        title: result.fields?.headline || result.webTitle || '',
+        description: result.fields?.trailText || '',
+        url: result.webUrl,
+        urlToImage: result.fields?.thumbnail,
+        source: { name: 'The Guardian' },
+    }));
 }
 
 startStaggeredLoop('oracle-tech', 15 * 60 * 1000, processTech);
