@@ -1,0 +1,136 @@
+require('dotenv').config();
+const axios = require('axios');
+const { ethers } = require('ethers');
+const { firstArticleImage, upsertMarketMetadata } = require('./market-metadata');
+const { createCooldownCache, startStaggeredLoop, withBackoff } = require('./oracle-utils');
+
+// --- CONFIGURATION ---
+const API_KEY = process.env.NEWS_API_KEY;
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const RPC_URL = process.env.RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
+
+if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !API_KEY) {
+    throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, or NEWS_API_KEY in .env');
+}
+
+// Specialized Source Buckets
+const FINANCE_SOURCES = 'the-wall-street-journal,fortune,business-insider,bloomberg';
+const CULTURE_SOURCES = 'entertainment-weekly,mtv-news,the-verge,buzzfeed';
+
+// --- MARKETS ---
+const MARKETS = [
+    // FINANCE
+    {
+        id: 5026001,
+        category: "Finance",
+        description: "Will the Federal Reserve raise interest rates in their next meeting?",
+        searchQuery: "Federal Reserve interest rate decision hike increase",
+        outcomeA_keywords: ["raised rates", "rate hike", "increased interest rates"],
+        outcomeB_keywords: ["kept rates steady", "rates unchanged", "cut rates"]
+    },
+    // CULTURE
+    {
+        id: 6026001,
+        category: "Culture",
+        description: "Will 'Dune: Part Three' be officially greenlit by June?",
+        searchQuery: "Dune Part 3 greenlit confirmed production",
+        outcomeA_keywords: ["officially greenlit", "confirmed for production", "part 3 announced"],
+        outcomeB_keywords: ["canceled", "on hold", "no plans for part 3"]
+    }
+];
+
+const ABI = [
+    "function createMarket(uint256 _id, string _category, string _description) public",
+    "function settle(uint256 _marketId, uint8 _winner, bool _isCanceled) public",
+    "function getMarketInfo(uint256 _id) public view returns (uint256 id, string category, string description, bool isSettled, uint8 winningOutcome, bool isCanceled, bool exists)"
+];
+
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
+const creationCooldown = createCooldownCache('finance-culture');
+
+async function processMarkets() {
+    console.log("\n--- Scanning Finance & Culture Markets ---");
+
+    for (const mDef of MARKETS) {
+        try {
+            const onChainMarket = await withBackoff(`finance-culture getMarketInfo ${mDef.id}`, () => contract.getMarketInfo(mDef.id));
+
+            if (!onChainMarket.exists) {
+                if (creationCooldown.shouldSkip(mDef.id)) continue;
+                console.log(`[ACTION] Creating ${mDef.category} Market: ${mDef.description}`);
+                let tx;
+                try {
+                    tx = await withBackoff(`finance-culture createMarket ${mDef.id}`, () =>
+                        contract.createMarket(mDef.id, mDef.category, mDef.description),
+                    );
+                    await withBackoff(`finance-culture wait create ${mDef.id}`, () => tx.wait(), { retries: 1 });
+                    creationCooldown.clear(mDef.id);
+                } catch (error) {
+                    creationCooldown.markFailure(mDef.id, error);
+                    throw error;
+                }
+                console.log(`[SUCCESS] Market ${mDef.id} Created.`);
+                continue;
+            }
+
+            if (onChainMarket.isSettled) continue;
+
+            const sources = (mDef.category === "Finance") ? FINANCE_SOURCES : CULTURE_SOURCES;
+
+            console.log(`[CHECK] Searching news for: ${mDef.description}`);
+            const response = await withBackoff(`newsapi finance-culture ${mDef.id}`, () => axios.get('https://newsapi.org/v2/everything', {
+                params: {
+                    q: mDef.searchQuery,
+                    sources: sources,
+                    sortBy: 'relevancy',
+                    language: 'en'
+                },
+                headers: { 'X-Api-Key': API_KEY }
+            }));
+
+            const articles = response.data.articles;
+            await upsertMarketMetadata({
+                marketId: mDef.id,
+                category: mDef.category,
+                title: mDef.description,
+                provider: "NewsAPI",
+                ...firstArticleImage(articles),
+                metadata: {
+                    searchQuery: mDef.searchQuery,
+                    sources,
+                },
+            });
+
+            let countA = 0;
+            let countB = 0;
+
+            for (const article of articles) {
+                const text = (article.title + " " + article.description).toLowerCase();
+                if (mDef.outcomeA_keywords.some(k => text.includes(k))) countA++;
+                if (mDef.outcomeB_keywords.some(k => text.includes(k))) countB++;
+            }
+
+            console.log(`[DATA] Hits for A: ${countA}, Hits for B: ${countB}`);
+
+            if (countA >= 2) {
+                console.log(`[SETTLE] Event Confirmed (Outcome A)!`);
+                const tx = await withBackoff(`finance-culture settle A ${mDef.id}`, () => contract.settle(mDef.id, 0, false));
+                await withBackoff(`finance-culture wait settle A ${mDef.id}`, () => tx.wait(), { retries: 1 });
+                console.log(`[SUCCESS] Market ${mDef.id} Settled.`);
+            } else if (countB >= 2) {
+                console.log(`[SETTLE] Event Confirmed (Outcome B)!`);
+                const tx = await withBackoff(`finance-culture settle B ${mDef.id}`, () => contract.settle(mDef.id, 1, false));
+                await withBackoff(`finance-culture wait settle B ${mDef.id}`, () => tx.wait(), { retries: 1 });
+                console.log(`[SUCCESS] Market ${mDef.id} Settled.`);
+            }
+
+        } catch (error) {
+            console.error(`[ERROR] Oracle failed for ${mDef.id}:`, error.message);
+        }
+    }
+}
+
+startStaggeredLoop('oracle-finance-culture', 20 * 60 * 1000, processMarkets);

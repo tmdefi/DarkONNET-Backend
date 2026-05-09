@@ -1,7 +1,7 @@
 {
   "name": "darkonnet",
   "version": "1.0.0",
-  "description": "<<<<<<< HEAD\r # DarkONNET-Backend\r =======\r # DarkONNET: Confidential Multi-Market Prediction Platform",
+  "description": "DarkONNET: Confidential Multi-Market Prediction Platform",
   "main": "ecosystem.config.js",
   "directories": {
     "lib": "lib"
@@ -39,7 +39,20 @@
     "ws": "^8.17.1"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node backend/comments/server.js",
+    "comments:dev": "node backend/comments/server.js",
+    "oracle:esports": "node relayer/esports-oracle.js",
+    "oracle:sports": "node relayer/sports-oracle.js",
+    "oracle:crypto": "node relayer/crypto-oracle.js",
+    "oracle:politics": "node relayer/politics-oracle.js",
+    "oracle:tech": "node relayer/tech-oracle.js",
+    "oracle:finance-culture": "node relayer/finance-culture-oracle.js",
+    "migrate:supabase": "node migrate-to-supabase.js",
+    "test": "npm run test:backend && npm run test:foundry",
+    "test:backend": "node backend/smoke-test.js",
+    "test:foundry": "node scripts/run-forge.js test -vvv",
+    "foundry:fmt": "node scripts/run-forge.js fmt --check",
+    "foundry:build": "node scripts/run-forge.js build --sizes"
   },
   "repository": {
     "type": "git",
