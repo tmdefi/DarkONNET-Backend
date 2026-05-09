@@ -38,6 +38,8 @@ const HOSTS = {
     F1: 'v1.formula-1.api-sports.io'
 };
 
+const F1_IMAGE_URL = '/f1-grand-prix.jpg';
+
 /**
  * UTILITY: API Request Helper
  */
@@ -211,7 +213,7 @@ async function processF1() {
                     category: "Sports - F1",
                     title: `Winner of ${r.competition.name}`,
                     provider: "API-Sports Formula 1",
-                    imageUrl: r.competition?.logo,
+                    imageUrl: r.competition?.logo || F1_IMAGE_URL,
                     leagueName: "Formula 1",
                     startsAt: r.date,
                     metadata: {
