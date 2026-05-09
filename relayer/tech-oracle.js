@@ -5,13 +5,13 @@ const { firstArticleImage, upsertMarketMetadata } = require('./market-metadata')
 const { createCooldownCache, startStaggeredLoop, withBackoff } = require('./oracle-utils');
 
 // --- CONFIGURATION ---
-const API_KEY = process.env.NEWS_API_KEY;
+const API_KEY = process.env.TECH_NEWS_API_KEY || process.env.NEWS_API_KEY;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const RPC_URL = process.env.RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 
 if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !API_KEY) {
-    throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, or NEWS_API_KEY in .env');
+    throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, or TECH_NEWS_API_KEY/NEWS_API_KEY in .env');
 }
 
 // Trusted Tech News Sources
