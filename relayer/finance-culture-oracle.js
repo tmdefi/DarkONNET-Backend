@@ -5,18 +5,20 @@ const { firstArticleImage, upsertMarketMetadata } = require('./market-metadata')
 const { createCooldownCache, startStaggeredLoop, withBackoff } = require('./oracle-utils');
 
 // --- CONFIGURATION ---
-const API_KEY = process.env.NEWS_API_KEY;
+const FINANCE_API_KEY = process.env.NEWS_API_KEY;
+const CULTURE_API_KEY = process.env.CULTURE_FREENEWS_API_KEY;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const RPC_URL = process.env.RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 
-if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !API_KEY) {
-    throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, or NEWS_API_KEY in .env');
+if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !FINANCE_API_KEY || !CULTURE_API_KEY) {
+    throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, NEWS_API_KEY, or CULTURE_FREENEWS_API_KEY in .env');
 }
 
 // Specialized Source Buckets
 const FINANCE_SOURCES = 'the-wall-street-journal,fortune,business-insider,bloomberg';
-const CULTURE_SOURCES = 'entertainment-weekly,mtv-news,the-verge,buzzfeed';
+const FREENEWS_API_URL = 'https://api.freenewsapi.io/v1/news';
+const CULTURE_TOPICS = ['movies', 'music', 'entertainment', 'celebrities'];
 
 // --- MARKETS ---
 const MARKETS = [
@@ -80,29 +82,17 @@ async function processMarkets() {
 
             if (onChainMarket.isSettled) continue;
 
-            const sources = (mDef.category === "Finance") ? FINANCE_SOURCES : CULTURE_SOURCES;
-
             console.log(`[CHECK] Searching news for: ${mDef.description}`);
-            const response = await withBackoff(`newsapi finance-culture ${mDef.id}`, () => axios.get('https://newsapi.org/v2/everything', {
-                params: {
-                    q: mDef.searchQuery,
-                    sources: sources,
-                    sortBy: 'relevancy',
-                    language: 'en'
-                },
-                headers: { 'X-Api-Key': API_KEY }
-            }));
-
-            const articles = response.data.articles;
+            const { articles, provider, sourceMetadata } = await fetchArticles(mDef);
             await upsertMarketMetadata({
                 marketId: mDef.id,
                 category: mDef.category,
                 title: mDef.description,
-                provider: "NewsAPI",
+                provider,
                 ...firstArticleImage(articles),
                 metadata: {
                     searchQuery: mDef.searchQuery,
-                    sources,
+                    ...sourceMetadata,
                 },
             });
 
@@ -133,6 +123,78 @@ async function processMarkets() {
             console.error(`[ERROR] Oracle failed for ${mDef.id}:`, error.message);
         }
     }
+}
+
+async function fetchArticles(mDef) {
+    if (mDef.category === "Culture") {
+        const topicArticles = await Promise.all(
+            CULTURE_TOPICS.map(async topic => {
+                const response = await withBackoff(`freenewsapi culture ${mDef.id} ${topic}`, () =>
+                    axios.get(FREENEWS_API_URL, {
+                        params: {
+                            q: mDef.searchQuery,
+                            topic,
+                            language: 'en',
+                            order_by: 'archive',
+                            page_size: 10,
+                        },
+                        headers: { 'x-api-key': CULTURE_API_KEY },
+                    }),
+                );
+
+                return normalizeFreeNewsArticles(response.data?.data || [], topic);
+            }),
+        );
+
+        return {
+            articles: dedupeArticles(topicArticles.flat()),
+            provider: 'FreeNewsApi',
+            sourceMetadata: {
+                sourceApi: 'freenewsapi',
+                topics: CULTURE_TOPICS,
+            },
+        };
+    }
+
+    const response = await withBackoff(`newsapi finance ${mDef.id}`, () => axios.get('https://newsapi.org/v2/everything', {
+        params: {
+            q: mDef.searchQuery,
+            sources: FINANCE_SOURCES,
+            sortBy: 'relevancy',
+            language: 'en',
+        },
+        headers: { 'X-Api-Key': FINANCE_API_KEY },
+    }));
+
+    return {
+        articles: response.data.articles || [],
+        provider: 'NewsAPI',
+        sourceMetadata: {
+            sourceApi: 'newsapi',
+            sources: FINANCE_SOURCES,
+        },
+    };
+}
+
+function normalizeFreeNewsArticles(results, topic) {
+    return results.map(result => ({
+        title: result.title || '',
+        description: result.subtitle || result.body || '',
+        url: result.original_url,
+        urlToImage: result.thumbnail,
+        source: { name: result.publisher || 'FreeNewsApi' },
+        topic,
+    }));
+}
+
+function dedupeArticles(articles) {
+    const seen = new Set();
+    return articles.filter(article => {
+        const key = article.url || `${article.title}:${article.description}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
 }
 
 startStaggeredLoop('oracle-finance-culture', 20 * 60 * 1000, processMarkets);
