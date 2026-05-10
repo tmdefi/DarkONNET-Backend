@@ -5,18 +5,18 @@ const { firstArticleImage, upsertMarketMetadata } = require('./market-metadata')
 const { createCooldownCache, startStaggeredLoop, withBackoff } = require('./oracle-utils');
 
 // --- CONFIGURATION ---
-const FINANCE_API_KEY = process.env.NEWS_API_KEY;
+const FINANCE_API_KEY = process.env.FINNHUB_API_KEY;
 const CULTURE_API_KEY = process.env.CULTURE_FREENEWS_API_KEY;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const RPC_URL = process.env.RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 
 if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !FINANCE_API_KEY || !CULTURE_API_KEY) {
-    throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, NEWS_API_KEY, or CULTURE_FREENEWS_API_KEY in .env');
+    throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, FINNHUB_API_KEY, or CULTURE_FREENEWS_API_KEY in .env');
 }
 
 // Specialized Source Buckets
-const FINANCE_SOURCES = 'the-wall-street-journal,fortune,business-insider,bloomberg';
+const FINNHUB_NEWS_API_URL = 'https://finnhub.io/api/v1/news';
 const FREENEWS_API_URL = 'https://api.freenewsapi.io/v1/news';
 const CULTURE_TOPICS = ['movies', 'music', 'entertainment', 'celebrities'];
 
@@ -28,6 +28,7 @@ const MARKETS = [
         category: "Finance",
         description: "Will the Federal Reserve raise interest rates in their next meeting?",
         expiryTimestamp: 1780272000,
+        finnhubCategory: "general",
         searchQuery: "Federal Reserve interest rate decision hike increase",
         outcomeA_keywords: ["raised rates", "rate hike", "increased interest rates"],
         outcomeB_keywords: ["kept rates steady", "rates unchanged", "cut rates"]
@@ -156,24 +157,32 @@ async function fetchArticles(mDef) {
         };
     }
 
-    const response = await withBackoff(`newsapi finance ${mDef.id}`, () => axios.get('https://newsapi.org/v2/everything', {
+    const response = await withBackoff(`finnhub finance ${mDef.id}`, () => axios.get(FINNHUB_NEWS_API_URL, {
         params: {
-            q: mDef.searchQuery,
-            sources: FINANCE_SOURCES,
-            sortBy: 'relevancy',
-            language: 'en',
+            category: mDef.finnhubCategory || 'general',
+            token: FINANCE_API_KEY,
         },
-        headers: { 'X-Api-Key': FINANCE_API_KEY },
     }));
+    const articles = normalizeFinnhubArticles(response.data || []);
 
     return {
-        articles: response.data.articles || [],
-        provider: 'NewsAPI',
+        articles,
+        provider: 'Finnhub',
         sourceMetadata: {
-            sourceApi: 'newsapi',
-            sources: FINANCE_SOURCES,
+            sourceApi: 'finnhub',
+            category: mDef.finnhubCategory || 'general',
         },
     };
+}
+
+function normalizeFinnhubArticles(results) {
+    return results.map(result => ({
+        title: result.headline || '',
+        description: result.summary || '',
+        url: result.url,
+        urlToImage: result.image,
+        source: { name: result.source || 'Finnhub' },
+    }));
 }
 
 function normalizeFreeNewsArticles(results, topic) {
