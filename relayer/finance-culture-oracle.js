@@ -37,6 +37,50 @@ const MARKETS = [
         outcomeA_keywords: ["raised rates", "rate hike", "increased interest rates"],
         outcomeB_keywords: ["kept rates steady", "rates unchanged", "cut rates"]
     },
+    {
+        id: 5026002,
+        category: "Finance",
+        description: "Will the May 2026 U.S. unemployment rate increase in the next jobs report?",
+        expiryTimestamp: 1780671600,
+        resolveAfterTimestamp: 1780671600,
+        finnhubCategory: "general",
+        searchQuery: "May 2026 jobs report unemployment rate increased rose",
+        outcomeA_keywords: ["unemployment rate rose", "unemployment rate increased", "jobless rate rose", "jobless rate increased"],
+        outcomeB_keywords: ["unemployment rate fell", "unemployment rate declined", "jobless rate fell", "jobless rate declined", "unemployment rate unchanged"]
+    },
+    {
+        id: 5026003,
+        category: "Finance",
+        description: "Will the May 2026 U.S. CPI report show inflation increased month over month?",
+        expiryTimestamp: 1781103600,
+        resolveAfterTimestamp: 1781103600,
+        finnhubCategory: "general",
+        searchQuery: "May 2026 CPI inflation increased month over month",
+        outcomeA_keywords: ["cpi rose", "consumer price index rose", "inflation increased", "prices increased", "inflation picked up"],
+        outcomeB_keywords: ["cpi fell", "consumer price index fell", "inflation eased", "prices were unchanged", "inflation cooled"]
+    },
+    {
+        id: 5026004,
+        category: "Finance",
+        description: "Will the Federal Reserve cut interest rates at the June 2026 FOMC meeting?",
+        expiryTimestamp: 1781740800,
+        resolveAfterTimestamp: 1781730000,
+        finnhubCategory: "general",
+        searchQuery: "Federal Reserve June 2026 FOMC cut interest rates",
+        outcomeA_keywords: ["cut rates", "lowered interest rates", "reduced interest rates", "rate cut"],
+        outcomeB_keywords: ["held rates steady", "kept rates unchanged", "left rates unchanged", "no rate cut"]
+    },
+    {
+        id: 5026005,
+        category: "Finance",
+        description: "Will the Federal Reserve keep interest rates unchanged at the June 2026 FOMC meeting?",
+        expiryTimestamp: 1781740800,
+        resolveAfterTimestamp: 1781730000,
+        finnhubCategory: "general",
+        searchQuery: "Federal Reserve June 2026 FOMC rates unchanged held steady",
+        outcomeA_keywords: ["held rates steady", "kept rates unchanged", "left rates unchanged", "held interest rates"],
+        outcomeB_keywords: ["cut rates", "raised rates", "rate hike", "lowered interest rates", "increased interest rates"]
+    },
     // CULTURE
     {
         id: 6026001,
@@ -49,6 +93,58 @@ const MARKETS = [
         apiSearchQuery: "Dune greenlit confirmed production",
         outcomeA_keywords: ["officially greenlit", "confirmed for production", "part 3 announced"],
         outcomeB_keywords: ["canceled", "on hold", "no plans for part 3"]
+    },
+    {
+        id: 6026002,
+        category: "Culture",
+        description: "Will Peter Jackson receive an honorary Palme d'Or at Cannes 2026?",
+        expiryTimestamp: 1778716800,
+        settleAfterExpiry: true,
+        expiryFallbackOutcome: 1,
+        searchQuery: "Peter Jackson honorary Palme d'Or Cannes 2026",
+        apiSearchQuery: "Peter Jackson honorary Palme d'Or Cannes",
+        cultureTopics: ["movies", "entertainment"],
+        outcomeA_keywords: ["received an honorary palme d'or", "received the honorary palme d'or", "accepted an honorary palme d'or", "accepted the honorary palme d'or", "was awarded an honorary palme d'or", "honorary palme d'or to peter jackson"],
+        outcomeB_keywords: ["did not receive", "ceremony canceled", "honorary palme d'or canceled"]
+    },
+    {
+        id: 6026003,
+        category: "Culture",
+        description: "Will Barbra Streisand receive the honorary Palme d'Or at Cannes 2026?",
+        expiryTimestamp: 1779580800,
+        settleAfterExpiry: true,
+        expiryFallbackOutcome: 1,
+        searchQuery: "Barbra Streisand honorary Palme d'Or Cannes 2026",
+        apiSearchQuery: "Barbra Streisand honorary Palme d'Or Cannes",
+        cultureTopics: ["movies", "entertainment", "celebrities"],
+        outcomeA_keywords: ["received the honorary palme d'or", "received an honorary palme d'or", "accepted the honorary palme d'or", "accepted an honorary palme d'or", "was awarded the honorary palme d'or", "honorary palme d'or to barbra streisand"],
+        outcomeB_keywords: ["did not receive", "ceremony canceled", "honorary palme d'or canceled"]
+    },
+    {
+        id: 6026004,
+        category: "Culture",
+        description: "Will Katy Perry perform at the 2026 FIFA World Cup opening ceremony?",
+        expiryTimestamp: 1781308800,
+        settleAfterExpiry: true,
+        expiryFallbackOutcome: 1,
+        searchQuery: "Katy Perry performed 2026 FIFA World Cup opening ceremony",
+        apiSearchQuery: "Katy Perry FIFA World Cup opening ceremony",
+        cultureTopics: ["music", "entertainment", "celebrities"],
+        outcomeA_keywords: ["katy perry performed", "katy perry took the stage", "performance by katy perry", "katy perry opened the world cup"],
+        outcomeB_keywords: ["katy perry did not perform", "katy perry pulled out", "katy perry canceled"]
+    },
+    {
+        id: 6026005,
+        category: "Culture",
+        description: "Will Alanis Morissette perform at a 2026 FIFA World Cup opening event?",
+        expiryTimestamp: 1781308800,
+        settleAfterExpiry: true,
+        expiryFallbackOutcome: 1,
+        searchQuery: "Alanis Morissette performed 2026 FIFA World Cup opening event",
+        apiSearchQuery: "Alanis Morissette FIFA World Cup opening event",
+        cultureTopics: ["music", "entertainment", "celebrities"],
+        outcomeA_keywords: ["alanis morissette performed", "alanis morissette took the stage", "performance by alanis morissette", "alanis morissette opened"],
+        outcomeB_keywords: ["alanis morissette did not perform", "alanis morissette pulled out", "alanis morissette canceled"]
     }
 ];
 
@@ -77,7 +173,9 @@ async function processMarkets() {
                 let tx;
                 try {
                     tx = await withBackoff(`finance-culture createMarket ${mDef.id}`, () =>
-                        contract.createMarket(mDef.id, mDef.category, mDef.description, mDef.expiryTimestamp),
+                        contract.createMarket(mDef.id, mDef.category, mDef.description, mDef.expiryTimestamp, {
+                            gasLimit: 700000,
+                        }),
                     );
                     await withBackoff(`finance-culture wait create ${mDef.id}`, () => tx.wait(), { retries: 1 });
                     creationCooldown.clear(mDef.id);
@@ -96,6 +194,10 @@ async function processMarkets() {
             }
 
             const articles = await syncMarketMetadata(mDef);
+            if (mDef.resolveAfterTimestamp && now < mDef.resolveAfterTimestamp) {
+                console.log(`[SKIP] Market ${mDef.id} resolution starts after ${new Date(mDef.resolveAfterTimestamp * 1000).toISOString()}.`);
+                continue;
+            }
 
             let countA = 0;
             let countB = 0;
@@ -176,7 +278,8 @@ function settlementMetadata(onChainMarket) {
 async function fetchArticles(mDef) {
     if (mDef.category === "Culture") {
         const topicArticles = [];
-        for (const topic of CULTURE_TOPICS) {
+        const cultureTopics = mDef.cultureTopics || CULTURE_TOPICS;
+        for (const topic of cultureTopics) {
             try {
                 const response = await withBackoff(`freenewsapi culture ${mDef.id} ${topic}`, () =>
                     axios.get(FREENEWS_API_URL, {
@@ -202,7 +305,7 @@ async function fetchArticles(mDef) {
             provider: 'FreeNewsApi',
             sourceMetadata: {
                 sourceApi: 'freenewsapi',
-                topics: CULTURE_TOPICS,
+                topics: cultureTopics,
             },
         };
     }
