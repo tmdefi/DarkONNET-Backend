@@ -8,8 +8,10 @@ const { createCooldownCache, startStaggeredLoop, withBackoff } = require('./orac
 const API_BASE_URL = 'https://api.pandascore.co';
 const API_KEY = process.env.ESPORTS_API_KEY;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const RPC_URL = process.env.RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
+const RPC_URL = process.env.ALCHEMY_RPC_URL || process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || process.env.RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
+const CREATE_MARKET_GAS_LIMIT = 600_000;
+const SETTLE_MARKET_GAS_LIMIT = 400_000;
 
 if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !API_KEY) {
     throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, or ESPORTS_API_KEY in .env');
@@ -50,7 +52,9 @@ async function autoCreateMarkets() {
                 let tx;
                 try {
                     tx = await withBackoff(`esports createMarket ${match.id}`, () =>
-                        contract.createMarket(match.id, "Esports", match.name, matchExpiryTimestamp(match)),
+                        contract.createMarket(match.id, "Esports", match.name, matchExpiryTimestamp(match), {
+                            gasLimit: CREATE_MARKET_GAS_LIMIT,
+                        }),
                     );
                     await withBackoff(`esports wait create ${match.id}`, () => tx.wait(), { retries: 1 });
                     creationCooldown.clear(match.id);
@@ -104,7 +108,9 @@ async function autoSettleMatches() {
                 const teamAId = matchDetails.data.opponents[0].opponent.id;
                 winner = (match.winner_id == teamAId) ? 0 : 1;
 
-                const tx = await withBackoff(`esports settle ${match.id}`, () => contract.settle(match.id, winner, isCanceled));
+                const tx = await withBackoff(`esports settle ${match.id}`, () =>
+                    contract.settle(match.id, winner, isCanceled, { gasLimit: SETTLE_MARKET_GAS_LIMIT }),
+                );
                 await withBackoff(`esports wait settle ${match.id}`, () => tx.wait(), { retries: 1 });
                 console.log(`[ESPORTS] Match ${match.id} Settled.`);
             }
