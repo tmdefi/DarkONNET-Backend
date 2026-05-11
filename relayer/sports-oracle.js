@@ -3,6 +3,7 @@ const axios = require('axios');
 const { ethers } = require('ethers');
 const { upsertMarketMetadata } = require('./market-metadata');
 const { createCooldownCache, startStaggeredLoop, withBackoff } = require('./oracle-utils');
+const { getTeamLogoUrl } = require('./team-logo-store');
 
 // --- CONFIGURATION ---
 const API_KEY = process.env.BSD_SPORTS_API_KEY;
@@ -69,7 +70,10 @@ async function autoCreateMarkets() {
 
         for (const event of sortByEventDate(events)) {
             const market = await withBackoff(`bsd sports getMarketInfo ${event.id}`, () => contract.getMarketInfo(event.id));
-            if (market.exists) continue;
+            if (market.exists) {
+                await syncEventMetadata(event);
+                continue;
+            }
             if (creationCooldown.shouldSkip(event.id)) continue;
 
             const title = eventTitle(event);
@@ -137,6 +141,10 @@ async function autoSettleMarkets() {
 
 async function syncEventMetadata(event, settlement = {}) {
     const title = eventTitle(event);
+    const [homeLogoUrl, awayLogoUrl] = await Promise.all([
+        getTeamLogoUrl(event.home_team),
+        getTeamLogoUrl(event.away_team),
+    ]);
     await upsertMarketMetadata({
         marketId: event.id,
         category: "Sports - Football",
@@ -144,6 +152,8 @@ async function syncEventMetadata(event, settlement = {}) {
         provider: "BSD Sports",
         homeName: event.home_team,
         awayName: event.away_team,
+        homeLogoUrl,
+        awayLogoUrl,
         startsAt: event.event_date,
         ...settlementMetadata(settlement),
         metadata: {
