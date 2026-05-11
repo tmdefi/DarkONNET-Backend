@@ -2,22 +2,42 @@ const { createClient } = require('@supabase/supabase-js');
 
 let cachedClient = null;
 
+function getSupabaseUrl() {
+    const rawUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+    return normalizeSupabaseUrl(rawUrl);
+}
+
+function getSupabaseServiceKey() {
+    return process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || '';
+}
+
 function hasSupabaseConfig() {
-    return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+    return Boolean(getSupabaseUrl() && getSupabaseServiceKey());
 }
 
 function getSupabaseClient() {
-    if (!hasSupabaseConfig()) {
+    const supabaseUrl = getSupabaseUrl();
+    const serviceKey = getSupabaseServiceKey();
+    if (!supabaseUrl || !serviceKey) {
         throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set to use Supabase storage');
     }
 
     if (!cachedClient) {
-        cachedClient = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+        cachedClient = createClient(supabaseUrl, serviceKey, {
             auth: { persistSession: false },
         });
     }
 
     return cachedClient;
+}
+
+function normalizeSupabaseUrl(value) {
+    const url = String(value || '').trim();
+    if (!url) return '';
+    if (/^https?:\/\//i.test(url)) return url;
+    if (url.startsWith('//')) return `https:${url}`;
+    if (url.startsWith('://')) return `https${url}`;
+    return `https://${url}`;
 }
 
 function shouldUseSupabase() {
@@ -43,6 +63,7 @@ function throwIfError(error, fallbackMessage) {
 module.exports = {
     getSupabaseClient,
     hasSupabaseConfig,
+    normalizeSupabaseUrl,
     shouldUseSupabase,
     throwIfError,
 };

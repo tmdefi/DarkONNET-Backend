@@ -44,6 +44,19 @@ async function main() {
         const comments = await requestJson(`${baseUrl}/api/markets/smoke-market/comments`);
         assert(comments.comments?.length === 1, 'comment list failed');
 
+        const profile = await requestJson(`${baseUrl}/api/wallets/${walletAddress}/profile`, {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                profileName: 'Smoke User',
+                bio: 'Testing profile persistence',
+            }),
+        });
+        assert(profile.profile?.profileName === 'Smoke User', 'profile save failed');
+
+        const savedProfile = await requestJson(`${baseUrl}/api/wallets/${walletAddress}/profile`);
+        assert(savedProfile.profile?.profileName === 'Smoke User', 'profile read failed');
+
         console.log('backend-smoke-ok');
     } finally {
         await close(server);
