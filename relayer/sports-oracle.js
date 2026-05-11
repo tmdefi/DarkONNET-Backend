@@ -12,6 +12,7 @@ const RPC_URL = process.env.ALCHEMY_RPC_URL || process.env.NEXT_PUBLIC_ALCHEMY_A
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const CREATE_MARKET_GAS_LIMIT = 600_000;
 const SETTLE_MARKET_GAS_LIMIT = 400_000;
+const UPCOMING_LOOKAHEAD_DAYS = 2;
 
 if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !API_KEY) {
     throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, or BSD_SPORTS_API_KEY in .env');
@@ -52,17 +53,21 @@ async function fetchBsdEvents(params) {
     return Array.isArray(response.data?.results) ? response.data.results : [];
 }
 
+function sortByEventDate(events) {
+    return [...events].sort((left, right) => Date.parse(left.event_date || '') - Date.parse(right.event_date || ''));
+}
+
 async function autoCreateMarkets() {
     console.log("\n[BSD SPORTS] Scanning for upcoming football events...");
     try {
         const events = await fetchBsdEvents({
             status: 'notstarted',
             date_from: new Date().toISOString(),
-            date_to: isoDaysFromNow(7),
+            date_to: isoDaysFromNow(UPCOMING_LOOKAHEAD_DAYS),
             limit: 20,
         });
 
-        for (const event of events) {
+        for (const event of sortByEventDate(events)) {
             const market = await withBackoff(`bsd sports getMarketInfo ${event.id}`, () => contract.getMarketInfo(event.id));
             if (market.exists) continue;
             if (creationCooldown.shouldSkip(event.id)) continue;
