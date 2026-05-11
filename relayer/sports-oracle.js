@@ -1,17 +1,20 @@
 require('dotenv').config();
 const axios = require('axios');
 const { ethers } = require('ethers');
-const { footballTeamLogo, upsertMarketMetadata } = require('./market-metadata');
+const { upsertMarketMetadata } = require('./market-metadata');
 const { createCooldownCache, startStaggeredLoop, withBackoff } = require('./oracle-utils');
 
 // --- CONFIGURATION ---
-const API_KEY = process.env.SPORTS_API_KEY;
+const API_KEY = process.env.BSD_SPORTS_API_KEY;
+const API_BASE_URL = (process.env.BSD_SPORTS_API_URL || 'https://sports.bzzoiro.com/api/v2').replace(/\/$/, '');
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const RPC_URL = process.env.RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
+const RPC_URL = process.env.ALCHEMY_RPC_URL || process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || process.env.RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
+const CREATE_MARKET_GAS_LIMIT = 600_000;
+const SETTLE_MARKET_GAS_LIMIT = 400_000;
 
 if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !API_KEY) {
-    throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, or SPORTS_API_KEY in .env');
+    throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, or BSD_SPORTS_API_KEY in .env');
 }
 
 const ABI = [
@@ -23,231 +26,146 @@ const ABI = [
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
-const creationCooldown = createCooldownCache('sports');
+const creationCooldown = createCooldownCache('bsd-sports');
 
-function expiryFromDate(value, fallbackDays = 7) {
-    const parsed = Date.parse(value || '');
+function eventTitle(event) {
+    return `${event.home_team || 'Home'} vs ${event.away_team || 'Away'}`;
+}
+
+function eventExpiryTimestamp(event) {
+    const parsed = Date.parse(event.event_date || '');
     if (Number.isFinite(parsed)) return Math.floor(parsed / 1000);
-    return Math.floor(Date.now() / 1000) + fallbackDays * 24 * 60 * 60;
+    return Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
 }
 
-// API Hosts
-const HOSTS = {
-    FOOTBALL: 'v3.football.api-sports.io',
-    NFL: 'v1.american-football.api-sports.io',
-    F1: 'v1.formula-1.api-sports.io'
-};
-
-const F1_IMAGE_URL = '/f1-grand-prix.jpg';
-
-/**
- * UTILITY: API Request Helper
- */
-async function fetchFromSportsAPI(host, endpoint, params) {
-    return await withBackoff(`sports api ${host}/${endpoint}`, () => axios.get(`https://${host}/${endpoint}`, {
-        params: params,
-        headers: { 'x-apisports-key': API_KEY }
-    }));
+function isoDaysFromNow(days) {
+    return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 }
 
-/**
- * MODULE: FOOTBALL (Soccer)
- */
-async function processFootball() {
-    console.log("\n[FOOTBALL] Scanning...");
+async function fetchBsdEvents(params) {
+    const response = await withBackoff(`bsd sports events ${params.status || 'all'}`, () =>
+        axios.get(`${API_BASE_URL}/events/`, {
+            params,
+            headers: { Authorization: `Token ${API_KEY}` },
+        }),
+    );
+    return Array.isArray(response.data?.results) ? response.data.results : [];
+}
+
+async function autoCreateMarkets() {
+    console.log("\n[BSD SPORTS] Scanning for upcoming football events...");
     try {
-        // 1. Create Upcoming (Premier League = 39)
-        const upcoming = await fetchFromSportsAPI(HOSTS.FOOTBALL, 'fixtures', { league: 39, season: 2026, status: 'NS', next: 5 });
-        for (const f of upcoming.data.response) {
-            const market = await withBackoff(`football getMarketInfo ${f.fixture.id}`, () => contract.getMarketInfo(f.fixture.id));
-            if (!market.exists) {
-                if (creationCooldown.shouldSkip(f.fixture.id)) continue;
-                console.log(`[FOOTBALL] Creating: ${f.teams.home.name} vs ${f.teams.away.name}`);
-                let tx;
-                try {
-                    tx = await withBackoff(`football createMarket ${f.fixture.id}`, () =>
-                        contract.createMarket(
-                            f.fixture.id,
-                            "Sports - Football",
-                            `${f.teams.home.name} vs ${f.teams.away.name}`,
-                            expiryFromDate(f.fixture.date),
-                        ),
-                    );
-                    await withBackoff(`football wait create ${f.fixture.id}`, () => tx.wait(), { retries: 1 });
-                    creationCooldown.clear(f.fixture.id);
-                } catch (error) {
-                    creationCooldown.markFailure(f.fixture.id, error);
-                    throw error;
-                }
-                await upsertMarketMetadata({
-                    marketId: f.fixture.id,
-                    category: "Sports - Football",
-                    title: `${f.teams.home.name} vs ${f.teams.away.name}`,
-                    provider: "API-Sports Football",
-                    homeName: f.teams.home.name,
-                    awayName: f.teams.away.name,
-                    homeLogoUrl: f.teams.home.logo || footballTeamLogo(f.teams.home.id),
-                    awayLogoUrl: f.teams.away.logo || footballTeamLogo(f.teams.away.id),
-                    leagueName: f.league?.name,
-                    leagueLogoUrl: f.league?.logo,
-                    startsAt: f.fixture?.date,
-                    metadata: {
-                        venue: f.fixture?.venue?.name,
-                        city: f.fixture?.venue?.city,
-                    },
-                });
-            }
-        }
+        const events = await fetchBsdEvents({
+            status: 'notstarted',
+            date_from: new Date().toISOString(),
+            date_to: isoDaysFromNow(7),
+            limit: 20,
+        });
 
-        // 2. Settle Finished
-        const finished = await fetchFromSportsAPI(HOSTS.FOOTBALL, 'fixtures', { league: 39, season: 2026, status: 'FT', last: 5 });
-        for (const f of finished.data.response) {
-            const market = await withBackoff(`football getMarketInfo finished ${f.fixture.id}`, () => contract.getMarketInfo(f.fixture.id));
-            if (market.exists && !market.isSettled) {
-                console.log(`[FOOTBALL] Settling: ${f.teams.home.name} vs ${f.teams.away.name}`);
-                let winner = (f.goals.home > f.goals.away) ? 0 : 1;
-                let isCanceled = (f.goals.home === f.goals.away); // Draw = Refund
-                const tx = await withBackoff(`football settle ${f.fixture.id}`, () => contract.settle(f.fixture.id, winner, isCanceled));
-                await withBackoff(`football wait settle ${f.fixture.id}`, () => tx.wait(), { retries: 1 });
+        for (const event of events) {
+            const market = await withBackoff(`bsd sports getMarketInfo ${event.id}`, () => contract.getMarketInfo(event.id));
+            if (market.exists) continue;
+            if (creationCooldown.shouldSkip(event.id)) continue;
+
+            const title = eventTitle(event);
+            console.log(`[BSD SPORTS] Creating football market: ${title}`);
+            let tx;
+            try {
+                tx = await withBackoff(`bsd sports createMarket ${event.id}`, () =>
+                    contract.createMarket(event.id, "Sports - Football", title, eventExpiryTimestamp(event), {
+                        gasLimit: CREATE_MARKET_GAS_LIMIT,
+                    }),
+                );
+                await withBackoff(`bsd sports wait create ${event.id}`, () => tx.wait(), { retries: 1 });
+                creationCooldown.clear(event.id);
+            } catch (error) {
+                creationCooldown.markFailure(event.id, error);
+                throw error;
             }
+
+            await syncEventMetadata(event);
+            console.log(`[BSD SPORTS] Market ${event.id} created.`);
         }
-    } catch (e) { console.error("[FOOTBALL ERROR]", e.message); }
+    } catch (error) {
+        console.error("[BSD SPORTS ERROR] Creator:", error.response?.data?.detail || error.message);
+    }
 }
 
-/**
- * MODULE: NFL (American Football)
- */
-async function processNFL() {
-    console.log("\n[NFL] Scanning...");
+async function autoSettleMarkets() {
+    console.log("[BSD SPORTS] Checking for finished football events...");
     try {
-        // 1. Create Upcoming (League 1 = NFL)
-        const upcoming = await fetchFromSportsAPI(HOSTS.NFL, 'games', { league: 1, season: 2026, status: 'NS', next: 5 });
-        for (const g of upcoming.data.response) {
-            const market = await withBackoff(`nfl getMarketInfo ${g.game.id}`, () => contract.getMarketInfo(g.game.id));
-            if (!market.exists) {
-                if (creationCooldown.shouldSkip(g.game.id)) continue;
-                console.log(`[NFL] Creating: ${g.teams.home.name} vs ${g.teams.away.name}`);
-                let tx;
-                try {
-                    tx = await withBackoff(`nfl createMarket ${g.game.id}`, () =>
-                        contract.createMarket(
-                            g.game.id,
-                            "Sports - NFL",
-                            `${g.teams.home.name} vs ${g.teams.away.name}`,
-                            expiryFromDate(g.game.date?.date),
-                        ),
-                    );
-                    await withBackoff(`nfl wait create ${g.game.id}`, () => tx.wait(), { retries: 1 });
-                    creationCooldown.clear(g.game.id);
-                } catch (error) {
-                    creationCooldown.markFailure(g.game.id, error);
-                    throw error;
-                }
-                await upsertMarketMetadata({
-                    marketId: g.game.id,
-                    category: "Sports - NFL",
-                    title: `${g.teams.home.name} vs ${g.teams.away.name}`,
-                    provider: "API-Sports NFL",
-                    homeName: g.teams.home.name,
-                    awayName: g.teams.away.name,
-                    homeLogoUrl: g.teams.home.logo,
-                    awayLogoUrl: g.teams.away.logo,
-                    leagueName: g.league?.name || "NFL",
-                    startsAt: g.game?.date?.date || g.game?.date,
-                    metadata: {
-                        week: g.game?.week,
-                        venue: g.game?.venue,
-                    },
-                });
-            }
-        }
+        const events = await fetchBsdEvents({
+            status: 'finished',
+            date_from: isoDaysFromNow(-7),
+            date_to: new Date().toISOString(),
+            limit: 20,
+        });
 
-        // 2. Settle Finished
-        const finished = await fetchFromSportsAPI(HOSTS.NFL, 'games', { league: 1, season: 2026, status: 'FT', last: 5 });
-        for (const g of finished.data.response) {
-            const market = await withBackoff(`nfl getMarketInfo finished ${g.game.id}`, () => contract.getMarketInfo(g.game.id));
-            if (market.exists && !market.isSettled) {
-                console.log(`[NFL] Settling: ${g.teams.home.name} vs ${g.teams.away.name}`);
-                let winner = (g.scores.home.total > g.scores.away.total) ? 0 : 1;
-                let isCanceled = (g.scores.home.total === g.scores.away.total);
-                const tx = await withBackoff(`nfl settle ${g.game.id}`, () => contract.settle(g.game.id, winner, isCanceled));
-                await withBackoff(`nfl wait settle ${g.game.id}`, () => tx.wait(), { retries: 1 });
-            }
+        for (const event of events) {
+            const market = await withBackoff(`bsd sports getMarketInfo finished ${event.id}`, () => contract.getMarketInfo(event.id));
+            if (!market.exists || market.isSettled) continue;
+
+            const homeScore = Number(event.home_score);
+            const awayScore = Number(event.away_score);
+            if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) continue;
+
+            const isCanceled = homeScore === awayScore;
+            const winner = homeScore > awayScore ? 0 : 1;
+            console.log(`[BSD SPORTS] Settling football market: ${eventTitle(event)}`);
+
+            const tx = await withBackoff(`bsd sports settle ${event.id}`, () =>
+                contract.settle(event.id, winner, isCanceled, { gasLimit: SETTLE_MARKET_GAS_LIMIT }),
+            );
+            await withBackoff(`bsd sports wait settle ${event.id}`, () => tx.wait(), { retries: 1 });
+
+            await syncEventMetadata(event, {
+                isSettled: true,
+                winningOutcome: winner,
+                isCanceled,
+            });
+            console.log(`[BSD SPORTS] Market ${event.id} settled.`);
         }
-    } catch (e) { console.error("[NFL ERROR]", e.message); }
+    } catch (error) {
+        console.error("[BSD SPORTS ERROR] Settler:", error.response?.data?.detail || error.message);
+    }
 }
 
-/**
- * MODULE: FORMULA 1
- */
-async function processF1() {
-    console.log("\n[F1] Scanning...");
-    try {
-        // 1. Create Upcoming Races
-        const upcoming = await fetchFromSportsAPI(HOSTS.F1, 'races', { season: 2026, type: 'race', next: 1 });
-        for (const r of upcoming.data.response) {
-            const market = await withBackoff(`f1 getMarketInfo ${r.id}`, () => contract.getMarketInfo(r.id));
-            if (!market.exists) {
-                if (creationCooldown.shouldSkip(r.id)) continue;
-                console.log(`[F1] Creating Race: ${r.competition.name}`);
-                // Simple market: Who wins? We define Option A as "The Favorite" or a specific driver.
-                // For simplicity, we'll label it by race name.
-                let tx;
-                try {
-                    tx = await withBackoff(`f1 createMarket ${r.id}`, () =>
-                        contract.createMarket(
-                            r.id,
-                            "Sports - F1",
-                            `Winner of ${r.competition.name}`,
-                            expiryFromDate(r.date),
-                        ),
-                    );
-                    await withBackoff(`f1 wait create ${r.id}`, () => tx.wait(), { retries: 1 });
-                    creationCooldown.clear(r.id);
-                } catch (error) {
-                    creationCooldown.markFailure(r.id, error);
-                    throw error;
-                }
-                await upsertMarketMetadata({
-                    marketId: r.id,
-                    category: "Sports - F1",
-                    title: `Winner of ${r.competition.name}`,
-                    provider: "API-Sports Formula 1",
-                    imageUrl: r.competition?.logo || F1_IMAGE_URL,
-                    leagueName: "Formula 1",
-                    startsAt: r.date,
-                    metadata: {
-                        circuit: r.circuit?.name,
-                        country: r.competition?.location?.country,
-                    },
-                });
-            }
-        }
-
-        // 2. Settle Finished
-        const lastRace = await fetchFromSportsAPI(HOSTS.F1, 'races', { season: 2026, type: 'race', last: 1 });
-        for (const r of lastRace.data.response) {
-            const market = await withBackoff(`f1 getMarketInfo finished ${r.id}`, () => contract.getMarketInfo(r.id));
-            if (market.exists && !market.isSettled && r.status === 'Completed') {
-                const results = await fetchFromSportsAPI(HOSTS.F1, 'rankings/races', { race: r.id });
-                if (results.data.response.length > 0) {
-                    const winnerDriver = results.data.response[0].driver.name;
-                    console.log(`[F1] Winner of ${r.competition.name}: ${winnerDriver}`);
-                    // Note: Outcome mapping for F1 depends on how you set up the betting.
-                    // For now, we settle for 0 (meaning the race was completed).
-                    const tx = await withBackoff(`f1 settle ${r.id}`, () => contract.settle(r.id, 0, false));
-                    await withBackoff(`f1 wait settle ${r.id}`, () => tx.wait(), { retries: 1 });
-                }
-            }
-        }
-    } catch (e) { console.error("[F1 ERROR]", e.message); }
+async function syncEventMetadata(event, settlement = {}) {
+    const title = eventTitle(event);
+    await upsertMarketMetadata({
+        marketId: event.id,
+        category: "Sports - Football",
+        title,
+        provider: "BSD Sports",
+        homeName: event.home_team,
+        awayName: event.away_team,
+        startsAt: event.event_date,
+        ...settlementMetadata(settlement),
+        metadata: {
+            leagueId: event.league_id,
+            roundNumber: event.round_number,
+            period: event.period,
+            homeScore: event.home_score,
+            awayScore: event.away_score,
+            status: event.status,
+            neutralGround: event.is_neutral_ground,
+            localDerby: event.is_local_derby,
+        },
+    });
 }
 
-async function runAll() {
-    await processFootball();
-    await processNFL();
-    await processF1();
-    console.log("\n--- All Sports Synced. Waiting 15 minutes... ---");
+function settlementMetadata(settlement) {
+    if (!settlement.isSettled) return {};
+    return {
+        status: settlement.isCanceled ? 'canceled' : 'resolved',
+        resolvedAt: new Date().toISOString(),
+        resolution: settlement.isCanceled ? 'canceled' : String(settlement.winningOutcome),
+    };
 }
 
-startStaggeredLoop('oracle-sports', 15 * 60 * 1000, runAll);
+async function main() {
+    await autoCreateMarkets();
+    await autoSettleMarkets();
+}
+
+startStaggeredLoop('oracle-sports', 15 * 60 * 1000, main);
