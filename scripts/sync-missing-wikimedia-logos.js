@@ -9,9 +9,15 @@ const BUCKET = process.env.TEAM_LOGO_BUCKET || 'team-logos';
 const LIMIT = Number(process.env.WIKIMEDIA_LOGO_SYNC_LIMIT || 20);
 const REQUEST_DELAY_MS = Number(process.env.WIKIMEDIA_LOGO_REQUEST_DELAY_MS || 1_500);
 const INCLUDE_PAST_MARKETS = process.env.WIKIMEDIA_LOGO_INCLUDE_PAST === 'true';
+const LEAGUE_IDS = parseLeagueIds(process.env.WIKIMEDIA_LOGO_LEAGUE_IDS);
 const WIKIDATA_API_URL = 'https://www.wikidata.org/w/api.php';
 const WIKIPEDIA_API_URL = 'https://en.wikipedia.org/w/api.php';
 const COMMONS_FILE_URL = 'https://commons.wikimedia.org/wiki/Special:FilePath';
+const TEAM_TITLE_ALIASES = {
+    athletic: ['Athletic Club (MG)'],
+    'operario pr': ['Operário Ferroviário Esporte Clube'],
+    'sao bernardo': ['São Bernardo Futebol Clube'],
+};
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env');
@@ -53,7 +59,7 @@ async function fetchFile(url) {
 async function missingTeams() {
     let query = supabase
         .from('markets')
-        .select('home_name,away_name,home_logo_url,away_logo_url,starts_at')
+        .select('home_name,away_name,home_logo_url,away_logo_url,starts_at,metadata')
         .eq('category', 'Sports - Football')
         .order('starts_at', { ascending: true })
         .limit(500);
@@ -67,6 +73,7 @@ async function missingTeams() {
 
     const teams = new Map();
     for (const market of data || []) {
+        if (LEAGUE_IDS && !LEAGUE_IDS.has(Number(market.metadata?.leagueId))) continue;
         if (market.home_name && !market.home_logo_url) teams.set(normalizeTeamName(market.home_name), market.home_name);
         if (market.away_name && !market.away_logo_url) teams.set(normalizeTeamName(market.away_name), market.away_name);
     }
@@ -76,6 +83,15 @@ async function missingTeams() {
         if (!await getTeamLogoUrl(teamName)) names.push(teamName);
     }
     return names.slice(0, LIMIT);
+}
+
+function parseLeagueIds(rawLeagueIds) {
+    if (!rawLeagueIds) return null;
+    const ids = rawLeagueIds
+        .split(',')
+        .map(value => Number(value.trim()))
+        .filter(value => Number.isInteger(value) && value > 0);
+    return ids.length ? new Set(ids) : null;
 }
 
 async function searchWikidata(teamName) {
@@ -120,15 +136,37 @@ async function searchWikipediaTitles(teamName) {
     const entities = ids.map(id => entityData.entities?.[id]).filter(Boolean);
     const matchingEntity = entities.find(entity => isTeamMatch(teamName, entity));
     if (!matchingEntity) return undefined;
-    return logoFileName(matchingEntity) ? matchingEntity : null;
+    if (logoFileName(matchingEntity)) return matchingEntity;
+
+    const logoFromPage = await searchWikipediaPageLogo(teamName, titles);
+    return logoFromPage ? logoFromPage : null;
 }
 
 function wikipediaTitleCandidates(teamName) {
     const name = String(teamName || '').trim();
+    const aliases = TEAM_TITLE_ALIASES[normalizeTeamName(name)] || [];
     const withoutFc = name.replace(/\s+(fc|f\.c\.|afc|a\.f\.c\.|cf|c\.f\.|sc|s\.c\.)$/i, '').trim();
-    const baseNames = Array.from(new Set([name, withoutFc].filter(Boolean)));
-    const suffixes = ['', ' F.C.', ' FC', ' A.F.C.', ' AFC', ' C.F.', ' CF', ' S.C.', ' SC'];
-    return baseNames.flatMap(base => suffixes.map(suffix => `${base}${suffix}`));
+    const withoutStateSuffix = withoutFc.replace(/[-\s]+(ac|al|am|ap|ba|ce|df|es|go|ma|mg|ms|mt|pa|pb|pe|pi|pr|rj|rn|ro|rr|rs|sc|se|sp|to)$/i, '').trim();
+    const baseNames = Array.from(new Set([name, withoutFc, withoutStateSuffix].filter(Boolean)));
+    const suffixes = [
+        '',
+        ' F.C.',
+        ' FC',
+        ' A.F.C.',
+        ' AFC',
+        ' C.F.',
+        ' CF',
+        ' S.C.',
+        ' SC',
+        ' E.C.',
+        ' EC',
+        ' Esporte Clube',
+        ' Futebol Clube',
+        ' OSC',
+        ' (MG)',
+        ' (Brazil)',
+    ];
+    return Array.from(new Set([...aliases, ...baseNames.flatMap(base => suffixes.map(suffix => `${base}${suffix}`))]));
 }
 
 function entityNames(entity) {
@@ -140,15 +178,66 @@ function entityNames(entity) {
 }
 
 function isTeamMatch(teamName, entity) {
-    const requested = normalizeTeamName(teamName);
+    const requestedNames = normalizedTeamNameCandidates(teamName);
     return entityNames(entity).some(name => {
         const candidate = normalizeTeamName(name);
-        return candidate === requested || (requested.length >= 4 && candidate.endsWith(` ${requested}`));
+        return requestedNames.some(requested =>
+            candidate === requested ||
+            (requested.length >= 4 && (candidate.endsWith(` ${requested}`) || candidate.startsWith(`${requested} `))),
+        );
     });
 }
 
 function logoFileName(entity) {
-    return entity.claims?.P154?.[0]?.mainsnak?.datavalue?.value || null;
+    if (entity.logoFileName) return entity.logoFileName;
+    return entity.claims?.P154?.[0]?.mainsnak?.datavalue?.value ||
+        entity.claims?.P18?.[0]?.mainsnak?.datavalue?.value ||
+        null;
+}
+
+async function searchWikipediaPageLogo(teamName, titles) {
+    const url = `${WIKIPEDIA_API_URL}?action=query&format=json&redirects=1&prop=images&imlimit=50&titles=${encodeURIComponent(titles.join('|'))}`;
+    const data = await fetchJson(url);
+    const pages = Object.values(data.query?.pages || {}).filter(page => !page.missing);
+
+    for (const page of pages) {
+        if (!isWikipediaTitleMatch(teamName, page.title)) continue;
+
+        const image = (page.images || []).find(({ title }) => isLikelyTeamLogoFile(teamName, title));
+        if (image) {
+            return {
+                id: `wikipedia:${page.pageid}`,
+                labels: { en: { value: page.title } },
+                logoFileName: image.title.replace(/^File:/, ''),
+                logoSource: 'wikipedia',
+            };
+        }
+    }
+
+    return null;
+}
+
+function isWikipediaTitleMatch(teamName, title) {
+    const requestedNames = normalizedTeamNameCandidates(teamName);
+    const candidate = normalizeTeamName(title);
+    return requestedNames.some(requested => candidate === requested || candidate.startsWith(`${requested} `));
+}
+
+function isLikelyTeamLogoFile(teamName, title) {
+    const fileName = title.replace(/^File:/, '').replace(/\.[^.]+$/, '');
+    const normalizedFileName = normalizeTeamName(fileName);
+    const normalizedTeamNames = normalizedTeamNameCandidates(teamName);
+    const blockedTerms = /\b(flag|kit|jersey|shirt|stadium|map|commons|icon|logo of)\b/i;
+
+    if (blockedTerms.test(fileName)) return false;
+    if (!/\b(logo|crest|badge|emblem|fc|f\.c\.|cf|c\.f\.|ac|a\.c\.|sc|s\.c\.)\b/i.test(fileName)) return false;
+    return normalizedTeamNames.some(teamName => normalizedFileName === teamName || normalizedFileName.includes(teamName));
+}
+
+function normalizedTeamNameCandidates(teamName) {
+    const normalized = normalizeTeamName(teamName);
+    const withoutStateSuffix = normalized.replace(/\s+(ac|al|am|ap|ba|ce|df|es|go|ma|mg|ms|mt|pa|pb|pe|pi|pr|rj|rn|ro|rr|rs|sc|se|sp|to)$/, '').trim();
+    return Array.from(new Set([normalized, withoutStateSuffix].filter(value => value.length >= 3)));
 }
 
 function fileExtension(fileName, contentType) {
@@ -171,7 +260,9 @@ function uploadContentType(ext, contentType) {
 
 async function uploadWikimediaLogo(teamName, entity) {
     const fileName = logoFileName(entity);
-    const fileUrl = `${COMMONS_FILE_URL}/${encodeURIComponent(fileName)}`;
+    const fileUrl = entity.logoSource === 'wikipedia'
+        ? `${WIKIPEDIA_API_URL.replace('/w/api.php', '')}/wiki/Special:Redirect/file/${fileName.replace(/\s+/g, '_')}`
+        : `${COMMONS_FILE_URL}/${encodeURIComponent(fileName)}`;
     const downloaded = await fetchFile(fileUrl);
     const normalizedName = normalizeTeamName(teamName);
     const ext = fileExtension(fileName, downloaded.contentType);
@@ -196,7 +287,9 @@ async function uploadWikimediaLogo(teamName, entity) {
             team_name: teamName,
             normalized_name: normalizedName,
             logo_url: logoUrl,
-            source_path: `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(fileName)}`,
+            source_path: entity.logoSource === 'wikipedia'
+                ? `https://en.wikipedia.org/wiki/File:${encodeURIComponent(fileName)}`
+                : `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(fileName)}`,
             updated_at: new Date().toISOString(),
         }, { onConflict: 'sport,normalized_name' });
 
