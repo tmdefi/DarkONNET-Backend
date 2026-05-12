@@ -14,6 +14,16 @@ const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const CREATE_MARKET_GAS_LIMIT = 600_000;
 const SETTLE_MARKET_GAS_LIMIT = 400_000;
 const UPCOMING_LOOKAHEAD_DAYS = 2;
+const DEFAULT_FOOTBALL_LEAGUES = {
+    7: 'Champions League',
+    1: 'Premier League',
+    5: 'Bundesliga',
+    4: 'Serie A',
+    39: 'FA Cup',
+    6: 'Ligue 1',
+    35: 'Copa do Brasil',
+};
+const ALLOWED_FOOTBALL_LEAGUES = parseLeagueAllowlist();
 
 if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !API_KEY) {
     throw new Error('Missing PRIVATE_KEY, CONTRACT_ADDRESS, or BSD_SPORTS_API_KEY in .env');
@@ -54,14 +64,54 @@ async function fetchBsdEvents(params) {
     return Array.isArray(response.data?.results) ? response.data.results : [];
 }
 
+function parseLeagueAllowlist() {
+    const rawLeagueIds = process.env.BSD_SPORTS_LEAGUE_IDS;
+    if (!rawLeagueIds) return DEFAULT_FOOTBALL_LEAGUES;
+
+    const ids = rawLeagueIds
+        .split(',')
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isInteger(value) && value > 0);
+
+    if (!ids.length) return DEFAULT_FOOTBALL_LEAGUES;
+    return Object.fromEntries(ids.map((id) => [id, `League ${id}`]));
+}
+
+function isAllowedFootballLeague(event) {
+    return Boolean(ALLOWED_FOOTBALL_LEAGUES[Number(event.league_id)]);
+}
+
+function allowedLeagueName(event) {
+    return ALLOWED_FOOTBALL_LEAGUES[Number(event.league_id)] || null;
+}
+
+async function fetchAllowedFootballEvents(params) {
+    const eventMap = new Map();
+
+    for (const leagueId of Object.keys(ALLOWED_FOOTBALL_LEAGUES)) {
+        const leagueEvents = await fetchBsdEvents({
+            ...params,
+            league_id: leagueId,
+        });
+
+        for (const event of leagueEvents) {
+            if (isAllowedFootballLeague(event)) {
+                eventMap.set(String(event.id), event);
+            }
+        }
+    }
+
+    return [...eventMap.values()];
+}
+
 function sortByEventDate(events) {
     return [...events].sort((left, right) => Date.parse(left.event_date || '') - Date.parse(right.event_date || ''));
 }
 
 async function autoCreateMarkets() {
-    console.log("\n[BSD SPORTS] Scanning for upcoming football events...");
+    console.log(`\n[BSD SPORTS] Scanning allowed football leagues: ${Object.values(ALLOWED_FOOTBALL_LEAGUES).join(', ')}`);
     try {
-        const events = await fetchBsdEvents({
+        const events = await fetchAllowedFootballEvents({
             status: 'notstarted',
             date_from: new Date().toISOString(),
             date_to: isoDaysFromNow(UPCOMING_LOOKAHEAD_DAYS),
@@ -103,7 +153,7 @@ async function autoCreateMarkets() {
 async function autoSettleMarkets() {
     console.log("[BSD SPORTS] Checking for finished football events...");
     try {
-        const events = await fetchBsdEvents({
+        const events = await fetchAllowedFootballEvents({
             status: 'finished',
             date_from: isoDaysFromNow(-7),
             date_to: new Date().toISOString(),
@@ -150,6 +200,7 @@ async function syncEventMetadata(event, settlement = {}) {
         category: "Sports - Football",
         title,
         provider: "BSD Sports",
+        leagueName: allowedLeagueName(event),
         homeName: event.home_team,
         awayName: event.away_team,
         homeLogoUrl,

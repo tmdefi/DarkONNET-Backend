@@ -64,6 +64,7 @@ Oracle/provider values:
 ESPORTS_API_KEY=...             # PandaScore
 BSD_SPORTS_API_KEY=...          # BSD Sports
 BSD_SPORTS_API_URL=https://sports.bzzoiro.com/api/v2
+BSD_SPORTS_LEAGUE_IDS=7,1,5,4,39,6,35
 NEWS_API_KEY=...                # Politics
 TECH_GUARDIAN_API_KEY=...       # Tech
 FINNHUB_API_KEY=...             # Finance
@@ -83,6 +84,7 @@ FOOTBALL_LOGOS_GITHUB_PREFIX=logos/
 Notes:
 
 - Sports and esports workers prefer `ALCHEMY_RPC_URL`, then `NEXT_PUBLIC_ALCHEMY_API_KEY`, then `RPC_URL`, then public Sepolia fallback.
+- `BSD_SPORTS_LEAGUE_IDS` controls football market creation and settlement. The default list is Champions League, Premier League, Bundesliga, Serie A, FA Cup, Ligue 1, and Copa do Brasil.
 - Other workers currently use `RPC_URL` with public Sepolia fallback.
 - Do not put `Authorization: Token ...` into `.env`; store only the raw BSD token in `BSD_SPORTS_API_KEY`.
 
