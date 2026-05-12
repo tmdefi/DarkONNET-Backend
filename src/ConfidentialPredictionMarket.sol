@@ -7,6 +7,7 @@ import {CoprocessorSetup} from "./CoprocessorSetup.sol";
 interface IEncryptedERC20 {
     function transferFrom(address from, address to, euint64 amount) external returns (bool);
     function transfer(address to, euint64 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (euint64);
 }
 
 contract ConfidentialPredictionMarket {
@@ -18,6 +19,7 @@ contract ConfidentialPredictionMarket {
         string description; // "T1 vs G2" or "Will Candidate X win?"
         euint64 totalBetsOutcomeA;
         euint64 totalBetsOutcomeB;
+        uint64 expiresAt;
         bool isSettled;
         uint8 winningOutcome;
         bool isCanceled;
@@ -27,6 +29,15 @@ contract ConfidentialPredictionMarket {
     mapping(uint256 => Market) public markets;
     mapping(uint256 => mapping(address => euint64)) private userBetsOutcomeA;
     mapping(uint256 => mapping(address => euint64)) private userBetsOutcomeB;
+    mapping(uint256 => mapping(address => bool)) private hasUserBetOutcomeA;
+    mapping(uint256 => mapping(address => bool)) private hasUserBetOutcomeB;
+    mapping(uint256 => address) public marketCreators;
+    mapping(uint256 => bool) public creatorStakeDeposited;
+    mapping(uint256 => address) public creatorStakeDepositors;
+
+    uint64 public constant BPS_DENOMINATOR = 10_000;
+    uint64 public constant CREATOR_FEE_BPS = 100;
+    uint64 public constant CREATOR_STAKE_AMOUNT = 1_000_000;
 
     struct PendingClaim {
         uint256 marketId;
@@ -49,7 +60,7 @@ contract ConfidentialPredictionMarket {
 
     address public owner;
 
-    event MarketCreated(uint256 indexed id, string category, string description);
+    event MarketCreated(uint256 indexed id, string category, string description, uint64 expiresAt);
     event BetPlaced(address indexed user, uint256 indexed marketId, uint8 outcome);
     event MarketSettled(uint256 indexed marketId, uint8 winner);
     event MarketCanceled(uint256 indexed marketId);
@@ -66,6 +77,11 @@ contract ConfidentialPredictionMarket {
         bytes32 denominatorHandle
     );
     event PositionExited(address indexed user, uint256 indexed marketId, uint8 outcome);
+    event CreatorStakeDeposited(uint256 indexed marketId, address indexed creator);
+    event CreatorStakeReleased(uint256 indexed marketId, address indexed creator);
+    event CreatorStakeWithdrawn(uint256 indexed marketId, address indexed creator);
+    event CreatorFeePaid(uint256 indexed marketId, address indexed creator, uint256 amount);
+    event PoolSnapshotRequested(uint256 indexed marketId, bytes32 yesPoolHandle, bytes32 noPoolHandle);
     event VolumeGaugeUpdated(uint256 indexed marketId, bytes32 gaugeHandle);
 
     constructor(address _cUSDTAddress) {
@@ -79,43 +95,126 @@ contract ConfidentialPredictionMarket {
         _;
     }
 
-    function createMarket(uint256 _id, string memory _category, string memory _description) public onlyOwner {
+    function createMarket(uint256 _id, string memory _category, string memory _description, uint64 _expiresAt)
+        public
+        onlyOwner
+    {
         require(!markets[_id].exists, "Market already exists");
+
+        euint64 emptyOutcomeA = FHE.asEuint64(0);
+        euint64 emptyOutcomeB = FHE.asEuint64(0);
+        FHE.allowThis(emptyOutcomeA);
+        FHE.allowThis(emptyOutcomeB);
 
         markets[_id] = Market({
             id: _id,
             category: _category,
             description: _description,
-            totalBetsOutcomeA: FHE.asEuint64(0),
-            totalBetsOutcomeB: FHE.asEuint64(0),
+            totalBetsOutcomeA: emptyOutcomeA,
+            totalBetsOutcomeB: emptyOutcomeB,
+            expiresAt: _expiresAt,
             isSettled: false,
             winningOutcome: 0,
             isCanceled: false,
             exists: true
         });
 
-        emit MarketCreated(_id, _category, _description);
+        emit MarketCreated(_id, _category, _description, _expiresAt);
     }
 
-    function bet(uint256 _marketId, uint8 _outcome, bytes calldata encryptedValue, bytes calldata proof) public {
+    function createMarketWithCreator(
+        uint256 _id,
+        string memory _category,
+        string memory _description,
+        address _creator,
+        uint64 _expiresAt
+    ) public onlyOwner {
+        createMarket(_id, _category, _description, _expiresAt);
+        marketCreators[_id] = _creator;
+    }
+
+    function depositCreatorStake(uint256 _marketId) public {
+        require(!creatorStakeDeposited[_marketId], "Creator stake exists");
+        euint64 stake = FHE.asEuint64(CREATOR_STAKE_AMOUNT);
+        FHE.allowThis(stake);
+        FHE.allow(stake, address(cUSDT));
+        require(cUSDT.transferFrom(msg.sender, address(this), stake), "cUSDT creator stake transfer failed");
+
+        creatorStakeDeposited[_marketId] = true;
+        creatorStakeDepositors[_marketId] = msg.sender;
+
+        emit CreatorStakeDeposited(_marketId, msg.sender);
+    }
+
+    function withdrawCreatorStake(uint256 _marketId) public {
+        address creator = creatorStakeDepositors[_marketId];
+        require(creatorStakeDeposited[_marketId], "No creator stake");
+        require(msg.sender == owner || msg.sender == creator, "Not authorized");
+
+        creatorStakeDeposited[_marketId] = false;
+        creatorStakeDepositors[_marketId] = address(0);
+
+        euint64 stake = FHE.asEuint64(CREATOR_STAKE_AMOUNT);
+        FHE.allowThis(stake);
+        FHE.allow(stake, address(cUSDT));
+        require(cUSDT.transfer(creator, stake), "cUSDT creator stake return failed");
+
+        emit CreatorStakeWithdrawn(_marketId, creator);
+    }
+
+    function releaseCreatorStake(uint256 _marketId) public onlyOwner {
+        address creator = creatorStakeDepositors[_marketId];
+        require(creatorStakeDeposited[_marketId], "No creator stake");
+
+        creatorStakeDeposited[_marketId] = false;
+        creatorStakeDepositors[_marketId] = address(0);
+
+        euint64 fee = FHE.asEuint64(CREATOR_STAKE_AMOUNT / BPS_DENOMINATOR * CREATOR_FEE_BPS);
+        euint64 refund =
+            FHE.asEuint64(CREATOR_STAKE_AMOUNT - (CREATOR_STAKE_AMOUNT / BPS_DENOMINATOR * CREATOR_FEE_BPS));
+        FHE.allowThis(fee);
+        FHE.allowThis(refund);
+        FHE.allow(fee, address(cUSDT));
+        FHE.allow(refund, address(cUSDT));
+        require(cUSDT.transfer(owner, fee), "cUSDT creator fee transfer failed");
+        require(cUSDT.transfer(creator, refund), "cUSDT creator stake release failed");
+
+        emit CreatorFeePaid(_marketId, creator, CREATOR_STAKE_AMOUNT / BPS_DENOMINATOR * CREATOR_FEE_BPS);
+        emit CreatorStakeReleased(_marketId, creator);
+    }
+
+    function bet(uint256 _marketId, uint8 _outcome, bytes calldata, bytes calldata) public {
         Market storage m = markets[_marketId];
         require(m.exists, "Market not found");
         require(!m.isSettled, "Market settled");
         require(!pendingExits[msg.sender].exists, "Pending exit");
         require(_outcome == 0 || _outcome == 1, "Invalid outcome");
 
-        // casting to bytes32 is safe because externalEuint64 is represented as a bytes32 encrypted handle.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        euint64 value = FHE.fromExternal(externalEuint64.wrap(bytes32(encryptedValue)), proof);
+        euint64 value = cUSDT.allowance(msg.sender, address(this));
+        FHE.allowThis(value);
         FHE.allow(value, address(cUSDT));
         require(cUSDT.transferFrom(msg.sender, address(this), value), "cUSDT transfer failed");
 
         if (_outcome == 0) {
-            userBetsOutcomeA[_marketId][msg.sender] = FHE.add(userBetsOutcomeA[_marketId][msg.sender], value);
-            m.totalBetsOutcomeA = FHE.add(m.totalBetsOutcomeA, value);
+            euint64 currentUserBet =
+                hasUserBetOutcomeA[_marketId][msg.sender] ? userBetsOutcomeA[_marketId][msg.sender] : FHE.asEuint64(0);
+            euint64 nextUserBet = FHE.add(currentUserBet, value);
+            euint64 nextPool = FHE.add(m.totalBetsOutcomeA, value);
+            userBetsOutcomeA[_marketId][msg.sender] = nextUserBet;
+            m.totalBetsOutcomeA = nextPool;
+            hasUserBetOutcomeA[_marketId][msg.sender] = true;
+            FHE.allowThis(nextUserBet);
+            FHE.allowThis(nextPool);
         } else {
-            userBetsOutcomeB[_marketId][msg.sender] = FHE.add(userBetsOutcomeB[_marketId][msg.sender], value);
-            m.totalBetsOutcomeB = FHE.add(m.totalBetsOutcomeB, value);
+            euint64 currentUserBet =
+                hasUserBetOutcomeB[_marketId][msg.sender] ? userBetsOutcomeB[_marketId][msg.sender] : FHE.asEuint64(0);
+            euint64 nextUserBet = FHE.add(currentUserBet, value);
+            euint64 nextPool = FHE.add(m.totalBetsOutcomeB, value);
+            userBetsOutcomeB[_marketId][msg.sender] = nextUserBet;
+            m.totalBetsOutcomeB = nextPool;
+            hasUserBetOutcomeB[_marketId][msg.sender] = true;
+            FHE.allowThis(nextUserBet);
+            FHE.allowThis(nextPool);
         }
 
         // Grant the user permission to see only their own position
@@ -151,7 +250,8 @@ contract ConfidentialPredictionMarket {
     /**
      * @notice Requests an early exit quote for the user's full position on one outcome.
      * @dev Locks the current position, removes it from the active pool, and emits public
-     *      decryption handles for the fair-value numerator and denominator.
+     *      decryption handles for the user's stake and a denominator of 1. Early exits
+     *      return stake minus a fee rather than valuing the position against the full pool.
      * @param _marketId The ID of the market
      * @param _outcome The outcome the user is betting on (0 or 1)
      */
@@ -163,37 +263,43 @@ contract ConfidentialPredictionMarket {
 
         euint64 userBet =
             (_outcome == 0) ? userBetsOutcomeA[_marketId][msg.sender] : userBetsOutcomeB[_marketId][msg.sender];
-        euint64 outcomePool = (_outcome == 0) ? m.totalBetsOutcomeA : m.totalBetsOutcomeB;
-        euint64 totalPool = FHE.add(m.totalBetsOutcomeA, m.totalBetsOutcomeB);
-        euint64 numerator = FHE.mul(userBet, totalPool);
+        euint64 denominator = FHE.asEuint64(1);
 
         if (_outcome == 0) {
-            userBetsOutcomeA[_marketId][msg.sender] = FHE.asEuint64(0);
+            euint64 emptyUserBet = FHE.asEuint64(0);
+            FHE.allowThis(emptyUserBet);
+            userBetsOutcomeA[_marketId][msg.sender] = emptyUserBet;
+            hasUserBetOutcomeA[_marketId][msg.sender] = false;
             m.totalBetsOutcomeA = FHE.sub(m.totalBetsOutcomeA, userBet);
+            FHE.allowThis(m.totalBetsOutcomeA);
         } else {
-            userBetsOutcomeB[_marketId][msg.sender] = FHE.asEuint64(0);
+            euint64 emptyUserBet = FHE.asEuint64(0);
+            FHE.allowThis(emptyUserBet);
+            userBetsOutcomeB[_marketId][msg.sender] = emptyUserBet;
+            hasUserBetOutcomeB[_marketId][msg.sender] = false;
             m.totalBetsOutcomeB = FHE.sub(m.totalBetsOutcomeB, userBet);
+            FHE.allowThis(m.totalBetsOutcomeB);
         }
 
         FHE.allowThis(userBet);
-        FHE.makePubliclyDecryptable(numerator);
-        FHE.makePubliclyDecryptable(outcomePool);
+        FHE.makePubliclyDecryptable(userBet);
+        FHE.makePubliclyDecryptable(denominator);
 
         pendingExits[msg.sender] = PendingExit({
             marketId: _marketId,
             outcome: _outcome,
             userBet: userBet,
-            numeratorHandle: FHE.toBytes32(numerator),
-            denominatorHandle: FHE.toBytes32(outcomePool),
+            numeratorHandle: FHE.toBytes32(userBet),
+            denominatorHandle: FHE.toBytes32(denominator),
             exists: true
         });
 
-        emit ExitRequested(msg.sender, _marketId, _outcome, FHE.toBytes32(numerator), FHE.toBytes32(outcomePool));
+        emit ExitRequested(msg.sender, _marketId, _outcome, FHE.toBytes32(userBet), FHE.toBytes32(denominator));
     }
 
     /**
      * @notice Completes a previously requested early exit.
-     * @dev Verifies KMS decryption proof, calculates fair value minus a 1% fee,
+     * @dev Verifies KMS decryption proof, calculates exited stake minus a 1% fee,
      *      and returns the payout as encrypted cUSDT.
      */
     function fulfillExitPosition(bytes memory abiEncodedCleartexts, bytes memory decryptionProof) public {
@@ -213,6 +319,7 @@ contract ConfidentialPredictionMarket {
         delete pendingExits[msg.sender];
 
         euint64 encryptedPayout = FHE.asEuint64(netExitValue);
+        FHE.allowThis(encryptedPayout);
         FHE.allow(encryptedPayout, address(cUSDT));
         require(cUSDT.transfer(msg.sender, encryptedPayout), "cUSDT exit transfer failed");
 
@@ -288,6 +395,7 @@ contract ConfidentialPredictionMarket {
         delete pendingClaims[msg.sender];
 
         euint64 encryptedPayout = FHE.asEuint64(payout);
+        FHE.allowThis(encryptedPayout);
         FHE.allow(encryptedPayout, address(cUSDT));
         require(cUSDT.transfer(msg.sender, encryptedPayout), "cUSDT payout transfer failed");
 
@@ -301,6 +409,7 @@ contract ConfidentialPredictionMarket {
             uint256 id,
             string memory category,
             string memory description,
+            uint64 expiresAt,
             bool isSettled,
             uint8 winningOutcome,
             bool isCanceled,
@@ -308,7 +417,7 @@ contract ConfidentialPredictionMarket {
         )
     {
         Market storage m = markets[_id];
-        return (m.id, m.category, m.description, m.isSettled, m.winningOutcome, m.isCanceled, m.exists);
+        return (m.id, m.category, m.description, m.expiresAt, m.isSettled, m.winningOutcome, m.isCanceled, m.exists);
     }
 
     function getMyPosition(uint256 _marketId, uint8 outcome) public view returns (euint64) {
@@ -323,6 +432,14 @@ contract ConfidentialPredictionMarket {
     function getPoolHandles(uint256 _marketId) public view returns (bytes32 handleA, bytes32 handleB) {
         Market storage m = markets[_marketId];
         return (FHE.toBytes32(m.totalBetsOutcomeA), FHE.toBytes32(m.totalBetsOutcomeB));
+    }
+
+    function requestPoolSnapshot(uint256 _marketId) public {
+        Market storage m = markets[_marketId];
+        require(m.exists, "Market not found");
+        FHE.makePubliclyDecryptable(m.totalBetsOutcomeA);
+        FHE.makePubliclyDecryptable(m.totalBetsOutcomeB);
+        emit PoolSnapshotRequested(_marketId, FHE.toBytes32(m.totalBetsOutcomeA), FHE.toBytes32(m.totalBetsOutcomeB));
     }
 
     /**

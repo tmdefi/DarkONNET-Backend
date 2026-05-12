@@ -32,7 +32,7 @@ Current Sepolia addresses used by the frontend:
 
 | Contract | Address |
 | --- | --- |
-| `ConfidentialPredictionMarket` | `0x3cA14ae6ae8eCDD32023D2041aF2B60F2c58DD6B` |
+| `ConfidentialPredictionMarket` | `0x69a9f1D7FDE2D7c154C02fb6abC9d8e6fCED7565` |
 | `EncryptedERC20` (cUSDT) | `0x0CbC92CA4D7eD07e935dc93bf6Ca6A5e26682035` |
 | `ConfidentialUSDTFaucet` | `0xcDda033C5F914cCBFf39D7517cc4Dba54Bf7eeD9` |
 
@@ -46,7 +46,7 @@ Core values:
 
 ```text
 PRIVATE_KEY=0x...
-CONTRACT_ADDRESS=0x3cA14ae6ae8eCDD32023D2041aF2B60F2c58DD6B
+CONTRACT_ADDRESS=0x69a9f1D7FDE2D7c154C02fb6abC9d8e6fCED7565
 RPC_URL=https://...
 ALCHEMY_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/...
 
