@@ -1,119 +1,182 @@
-<<<<<<< HEAD
-# DarkONNET-Backend
-=======
-# DarkONNET: Confidential Multi-Market Prediction Platform
+# DarkONNET Backend
 
-**DarkONNET** is a privacy-preserving, automated prediction market built on the **Zama fhEVM Sepolia Testnet**. It leverages Fully Homomorphic Encryption (FHE) to keep user positions and market totals confidential while maintaining trustless, automated settlement.
+Backend API, oracle workers, Supabase metadata sync, and Foundry contracts for DarkONNET, a confidential prediction market on Zama fhEVM Sepolia.
 
----
+DarkONNET keeps user position sizes, cUSDT balances, and pool totals encrypted with `euint64` while still allowing markets to be created, settled, claimed, refunded, and exited on-chain.
 
 ## Current Status
 
-- Smart contracts, faucet, deployment script, and oracle workers are implemented.
-- Contract tests cover market admin actions, faucet minting/cooldown, encrypted betting, settlement claims, cancellation refunds, and two-phase early exits.
-- Off-chain threaded market comments and real-time wallet notifications are available through the comments backend.
-- The Next.js frontend application is built and integrated. It supports user wallet connection, market exploration, confidential betting via FHE, creator market requests, and a secure admin panel for creator market approval or resolving unresolved markets if there is any error.
-- Token wrapping is planned but not implemented; current test liquidity comes from the confidential cUSDT faucet.
-- Relayers read `INFURA_API_KEY` and `CONTRACT_ADDRESS` from `.env`.
+- Smart contracts, faucet, deployment scripts, and oracle workers are implemented.
+- Foundry tests cover market creation, admin actions, encrypted betting, settlement claims, cancellation refunds, faucet minting, cooldowns, and early exits.
+- The backend API supports markets, comments, threaded replies, notifications, participants, and wallet profiles.
+- Supabase is the production storage path when credentials are present; local JSON storage remains available for development.
+- Sports markets currently use BSD Sports for football events.
+- Esports markets use PandaScore.
+- Football team logos are synced into Supabase Storage and referenced through the `team_logos` catalog.
 
----
+## Repository Layout
 
-## 🛡️ The FHE Advantage
-Traditional prediction markets (like Polymarket) are fully transparent. This leads to several issues:
-- **Copy-Trading**: Large bettors can be tracked and copied.
-- **Market Manipulation**: Visible pool totals allow whales to "swing" odds to their advantage.
-- **Privacy Leakage**: A user's financial convictions are public knowledge.
-
-**DarkONNET solves this** by using Zama's `fhevm`:
-- **Encrypted Bets**: User bet amounts are stored as `euint64`.
-- **Private Liquidity**: Total pool sizes are never revealed in plaintext until settlement.
-- **Confidential Payouts**: Uses the **Asynchronous Gateway Pattern** to verify winnings and distribute payouts without ever exposing the math in the clear.
-
----
-
-## 🤖 The Oracle Ecosystem
-Foundr features a fully autonomous relayer suite that bridges real-world data into the FHE environment across **7 categories**:
-
-| Category | Data Provider | Logic |
-| :--- | :--- | :--- |
-| **Esports** | PandaScore API | Automatic match creation and winner settlement. |
-| **Sports** | API-Sports | Covers Football (Premier League), NFL, and Formula 1. |
-| **Politics** | NewsAPI (Reuters/AP) | Headlines-based settlement with consensus logic. |
-| **Tech** | NewsAPI (TechCrunch/Verge) | Tracks product launches and tech milestones. |
-| **Crypto** | CoinGecko API | Price-threshold markets (e.g., "BTC > $70k"). |
-| **Finance** | NewsAPI (WSJ/Bloomberg) | Economic indicators and interest rate decisions. |
-| **Culture** | NewsAPI (Variety) | Entertainment awards and cultural events. |
-
----
-
-## 🏗️ Architecture
-
-1.  **Smart Contracts (`src/`)**: 
-    - `ConfidentialPredictionMarket.sol`: The core engine handling categorized markets and encrypted state.
-    - `EncryptedERC20.sol`: A custom cUSDT stablecoin.
-    - `ConfidentialUSDTFaucet.sol`: A rate-limited faucet for test liquidity.
-2.  **Relayers (`relayer/`)**: 5 Node.js scripts that poll global APIs and trigger `createMarket` and `settle` functions on-chain.
-3.  **Comments Backend (`backend/comments/`)**: Stores off-chain, wallet-linked market commentary, threaded replies, market metadata, and real-time notifications.
-4.  **Coprocessor**: Utilizes Zama's KMS and Gateway for secure decryption of payout ratios.
-
----
-
-## 🚀 Quick Start
-
-### 1. Prerequisites
-- [Foundry](https://getfoundry.sh/)
-- Node.js (v18+)
-- Zama fhEVM Environment
-
-### 2. Environment Setup
-Create a `.env` file with the following:
 ```text
-PRIVATE_KEY=your_wallet_private_key
-INFURA_API_KEY=your_infura_api_key
-ESPORTS_API_KEY=your_pandascore_key
-NEWS_API_KEY=your_newsapi_key
-SPORTS_API_KEY=your_apisports_key
-CONTRACT_ADDRESS=0xYourDeployedPredictionMarketAddress
+backend/                 REST + WebSocket API, auth, stores, profile validation
+relayer/                 Oracle workers and Supabase market metadata writers
+scripts/                 Railway start helpers, Foundry runner, logo sync/backfill scripts
+src/                     Solidity contracts
+test/                    Foundry tests
+supabase/migrations/     Supabase schema migrations
+ecosystem.config.js      PM2 process definitions
+```
+
+## Contracts
+
+Current Sepolia addresses used by the frontend:
+
+| Contract | Address |
+| --- | --- |
+| `ConfidentialPredictionMarket` | `0x3cA14ae6ae8eCDD32023D2041aF2B60F2c58DD6B` |
+| `EncryptedERC20` (cUSDT) | `0x0CbC92CA4D7eD07e935dc93bf6Ca6A5e26682035` |
+| `ConfidentialUSDTFaucet` | `0xcDda033C5F914cCBFf39D7517cc4Dba54Bf7eeD9` |
+
+Set `CONTRACT_ADDRESS` to the prediction market address for oracle workers.
+
+## Environment
+
+Copy `.env.example` to `.env` and fill the values you need.
+
+Core values:
+
+```text
+PRIVATE_KEY=0x...
+CONTRACT_ADDRESS=0x3cA14ae6ae8eCDD32023D2041aF2B60F2c58DD6B
+RPC_URL=https://...
+ALCHEMY_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/...
+
 COMMENTS_PORT=8787
-COMMENTS_DB_PATH=data/comments.json
+API_STORE=supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=...
 API_AUTH_REQUIRED=true
-API_ADMIN_WALLETS=0xYourAdminWallet
+API_ADMIN_WALLETS=0xAdminWallet,...
 ```
 
-### 3. Automated Deployment
-Deploy the entire ecosystem (Token, Faucet, Market) with one command:
+Oracle/provider values:
+
+```text
+ESPORTS_API_KEY=...             # PandaScore
+BSD_SPORTS_API_KEY=...          # BSD Sports
+BSD_SPORTS_API_URL=https://sports.bzzoiro.com/api/v2
+NEWS_API_KEY=...                # Politics
+TECH_GUARDIAN_API_KEY=...       # Tech
+FINNHUB_API_KEY=...             # Finance
+CULTURE_FREENEWS_API_KEY=...    # Culture
+```
+
+Logo catalog values:
+
+```text
+TEAM_LOGO_BUCKET=team-logos
+FOOTBALL_LOGOS_GITHUB_OWNER=luukhopman
+FOOTBALL_LOGOS_GITHUB_REPO=football-logos
+FOOTBALL_LOGOS_GITHUB_REF=master
+FOOTBALL_LOGOS_GITHUB_PREFIX=logos/
+```
+
+Notes:
+
+- Sports and esports workers prefer `ALCHEMY_RPC_URL`, then `NEXT_PUBLIC_ALCHEMY_API_KEY`, then `RPC_URL`, then public Sepolia fallback.
+- Other workers currently use `RPC_URL` with public Sepolia fallback.
+- Do not put `Authorization: Token ...` into `.env`; store only the raw BSD token in `BSD_SPORTS_API_KEY`.
+
+## Local Development
+
+Install dependencies:
+
 ```powershell
-./deploy.ps1
+npm install
 ```
 
-### 4. Activate the Oracles
-Run your preferred oracle to start populating the market:
-```powershell
-npm run oracle:crypto
-```
+Run the API:
 
-### 5. Run Market Comments API
-Start the off-chain threaded comments backend:
 ```powershell
 npm run comments:dev
 ```
 
-The comments API supports:
-- `GET /api/markets/:marketId/comments`
-- `POST /api/markets/:marketId/comments`
-- `GET /api/markets`
-- `GET /api/markets/:marketId`
-- `PUT /api/markets/:marketId`
-- `POST /api/markets/:marketId/participants`
-- `GET /api/wallets/:walletAddress/notifications`
-- `PATCH /api/wallets/:walletAddress/notifications/:notificationId`
-- `POST /api/wallets/:walletAddress/notifications`
-- `GET /api/wallets/:walletAddress/profile`
-- `PUT /api/wallets/:walletAddress/profile`
-- `WS /ws/notifications?walletAddress=:walletAddress`
+Run one oracle:
 
-Mutating routes and wallet notification feeds require signed wallet authentication when `API_AUTH_REQUIRED` is not set to `false`.
-Clients sign this message shape with their wallet:
+```powershell
+npm run oracle:sports
+npm run oracle:esports
+npm run oracle:crypto
+npm run oracle:politics
+npm run oracle:tech
+npm run oracle:finance-culture
+```
+
+Run with PM2:
+
+```powershell
+pm2 start ecosystem.config.js
+pm2 status
+pm2 logs oracle-sports
+```
+
+Run tests/checks:
+
+```powershell
+npm run test:backend
+npm run test:foundry
+npm run foundry:build
+npm run foundry:fmt
+```
+
+## Supabase
+
+Apply migrations from `supabase/migrations/` in Supabase SQL editor or your migration flow.
+
+The backend stores:
+
+- `markets`
+- `comments`
+- `notifications`
+- `profiles`
+- `market_participants`
+- `team_logos`
+
+Profile data is validated server-side. Profile images must be image data URLs and are compressed client-side before save.
+
+## Logo Sync
+
+The sports oracle uses BSD event/team data first, then looks up normalized team names in Supabase `team_logos`.
+
+Useful scripts:
+
+```powershell
+npm run logos:sync
+npm run logos:sync:wikimedia
+npm run logos:backfill
+```
+
+`logos:sync` imports from `luukhopman/football-logos` into Supabase Storage. The Wikimedia script is an optional fallback for missing teams. `logos:backfill` updates existing sports market metadata with catalog logos.
+
+## API
+
+Common routes:
+
+```text
+GET    /api/markets
+GET    /api/markets/:marketId
+PUT    /api/markets/:marketId
+POST   /api/markets/:marketId/comments
+POST   /api/markets/:marketId/participants
+GET    /api/wallets/:walletAddress/profile
+PUT    /api/wallets/:walletAddress/profile
+GET    /api/wallets/:walletAddress/notifications
+PATCH  /api/wallets/:walletAddress/notifications/:notificationId
+WS     /ws/notifications?walletAddress=:walletAddress
+```
+
+When `API_AUTH_REQUIRED` is not `false`, mutating routes require signed wallet auth. Admin/oracle metadata writes require a wallet listed in `API_ADMIN_WALLETS`.
+
+Message shape:
 
 ```text
 DarkONNET API request
@@ -124,66 +187,16 @@ Timestamp: 1770000000000
 BodyHash: 0x...
 ```
 
-Creator submissions must be signed by `creatorWalletAddress`. Comment, participant, profile, and notification actions must be signed by the target wallet. Admin/oracle metadata writes, market acceptance, decline, and resolution must be signed by a wallet listed in `API_ADMIN_WALLETS`.
+## Railway
 
-Create a comment or reply with:
-```json
-{
-  "walletAddress": "0x1111111111111111111111111111111111111111",
-  "displayName": "Alice",
-  "body": "This market is heating up.",
-  "parentId": "optional-existing-comment-id"
-}
-```
+`npm run start:railway` starts selected processes from `scripts/start-railway.js`.
 
-Market metadata is written by the relayers after on-chain market creation. The frontend can use it for market cards:
-```json
-{
-  "marketId": "123",
-  "onchainMarketId": "123",
-  "slug": "arsenal-vs-chelsea",
-  "category": "Sports - Football",
-  "title": "Arsenal vs Chelsea",
-  "homeLogoUrl": "https://media.api-sports.io/football/teams/42.png",
-  "awayLogoUrl": "https://media.api-sports.io/football/teams/49.png",
-  "imageUrl": "https://example.com/article-or-league-image.png",
-  "creatorWalletAddress": "0x1111111111111111111111111111111111111111",
-  "status": "pending"
-}
-```
+Use `RAILWAY_PROCESSES` to choose processes, for example:
 
-Notifications are stored by wallet address and pushed live to connected clients. Connect with:
 ```text
-ws://localhost:8787/ws/notifications?walletAddress=0x1111111111111111111111111111111111111111
+RAILWAY_PROCESSES=api,oracle-sports,oracle-esports
 ```
 
-The server creates notifications when:
-- someone replies to a user's comment;
-- a creator's market transitions to `status: "accepted"`;
-- a market transitions to `status: "resolved"` for wallets registered through `POST /api/markets/:marketId/participants`.
+## License
 
-Live notification messages are JSON:
-```json
-{
-  "type": "notification.created",
-  "notification": {
-    "type": "market.resolved",
-    "marketId": "123",
-    "title": "Market resolved",
-    "body": "A market you participated in was resolved: Arsenal vs Chelsea"
-  }
-}
-```
-
----
-
-## 📜 Contract Addresses (Latest Sepolia)
-- **Prediction Market**: `0x0dbeA55D54647759dC7eA6523d005B3c9C173730`
-- **cUSDT Token**: `0x3f14f7f11131E4698ED5Ad6A03C3EF1924cF3F0d`
-- **Faucet**: `0xd978f57d7fD0fAb73a99D7D68c962386F25E1D00`
-
----
-
-## ⚖️ License
-MIT - Built for the Zama dApp Demo Challenge.
->>>>>>> c42f364 (initial commit: DarkONNET backend, oracles, and smart contracts)
+MIT
