@@ -47,7 +47,7 @@ function createCommentsServer({
         try {
             const url = new URL(req.url, 'http://localhost');
 
-            if (req.method === 'GET' && url.pathname === '/health') {
+            if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
                 sendJson(res, 200, { ok: true });
                 return;
             }
@@ -665,9 +665,10 @@ class NotificationHub {
 
 if (require.main === module) {
     const port = Number(process.env.PORT || process.env.COMMENTS_PORT || DEFAULT_PORT);
+    const host = process.env.HOST || '0.0.0.0';
     const server = createCommentsServer();
-    server.listen(port, () => {
-        console.log(`Comments API listening on http://localhost:${port}`);
+    server.listen(port, host, () => {
+        console.log(`Comments API listening on http://${host}:${port}`);
     });
 }
 

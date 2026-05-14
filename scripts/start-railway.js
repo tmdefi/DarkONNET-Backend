@@ -11,9 +11,34 @@ const PROCESS_DEFINITIONS = {
         args: ['relayer/tech-oracle.js'],
         required: false,
     },
+    'oracle-sports': {
+        command: process.execPath,
+        args: ['relayer/sports-oracle.js'],
+        required: false,
+    },
+    'oracle-esports': {
+        command: process.execPath,
+        args: ['relayer/esports-oracle.js'],
+        required: false,
+    },
+    'oracle-crypto': {
+        command: process.execPath,
+        args: ['relayer/crypto-oracle.js'],
+        required: false,
+    },
+    'oracle-politics': {
+        command: process.execPath,
+        args: ['relayer/politics-oracle.js'],
+        required: false,
+    },
+    'oracle-finance-culture': {
+        command: process.execPath,
+        args: ['relayer/finance-culture-oracle.js'],
+        required: false,
+    },
 };
 
-const requestedProcesses = String(process.env.RAILWAY_PROCESSES || 'api,oracle-tech')
+const requestedProcesses = String(process.env.RAILWAY_PROCESSES || 'api')
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
