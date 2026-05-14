@@ -39,7 +39,7 @@
     "ws": "^8.17.1"
   },
   "scripts": {
-    "start": "node backend/comments/server.js",
+    "start": "node scripts/start-railway.js",
     "start:railway": "node scripts/start-railway.js",
     "comments:dev": "node backend/comments/server.js",
     "oracle:esports": "node relayer/esports-oracle.js",
