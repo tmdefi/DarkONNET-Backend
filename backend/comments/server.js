@@ -228,7 +228,7 @@ async function handleAuthRoute(route, req, res, sessionStore, authContext) {
 async function handleMarketsRoute(route, req, res, marketStore, notificationStore, notificationHub, authContext) {
     if (req.method === 'GET' && route.marketId) {
         const market = await marketStore.get(route.marketId);
-        sendJson(res, 200, { market });
+        sendJson(res, 200, { market: publicMarket(market) });
         return;
     }
 
@@ -236,7 +236,7 @@ async function handleMarketsRoute(route, req, res, marketStore, notificationStor
         const markets = await marketStore.list({
             includeEnded: isTruthyQueryParam(authContext.url.searchParams.get('includeEnded')),
         });
-        sendJson(res, 200, { markets });
+        sendJson(res, 200, { markets: markets.map(publicMarket) });
         return;
     }
 
@@ -279,7 +279,7 @@ async function handleParticipantsRoute(route, req, res, marketStore, authContext
         });
     }
     const market = await marketStore.addParticipant(route.marketId, body.walletAddress);
-    sendJson(res, 200, { market });
+    sendJson(res, 200, { market: publicMarket(market) });
 }
 
 async function handleNotificationsRoute(route, req, res, notificationStore, authContext) {
@@ -454,6 +454,12 @@ function publicSession(session) {
         walletAddress: session.walletAddress,
         expiresAt: session.expiresAt,
     };
+}
+
+function publicMarket(market) {
+    if (!market || typeof market !== 'object') return market;
+    const { participants, ...publicFields } = market;
+    return publicFields;
 }
 
 function matchMarketParticipantsRoute(method, pathname) {

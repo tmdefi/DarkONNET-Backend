@@ -30,6 +30,19 @@ async function main() {
         });
         assert(market.market?.marketId === 'smoke-market', 'market upsert failed');
 
+        const participant = await requestJson(`${baseUrl}/api/markets/smoke-market/participants`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ walletAddress }),
+        });
+        assert(!Object.hasOwn(participant.market || {}, 'participants'), 'participant response exposed participants');
+
+        const listedMarkets = await requestJson(`${baseUrl}/api/markets`);
+        assert(!Object.hasOwn(listedMarkets.markets?.[0] || {}, 'participants'), 'market list exposed participants');
+
+        const savedMarket = await requestJson(`${baseUrl}/api/markets/smoke-market`);
+        assert(!Object.hasOwn(savedMarket.market || {}, 'participants'), 'market detail exposed participants');
+
         const comment = await requestJson(`${baseUrl}/api/markets/smoke-market/comments`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
